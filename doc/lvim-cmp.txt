@@ -1,0 +1,160 @@
+*lvim-cmp.txt*                     The completion engine of the lvim-tech set
+
+==============================================================================
+CONTENTS                                                            *lvim-cmp*
+
+  1. Introduction ........................... |lvim-cmp-intro|
+  2. Requirements ........................... |lvim-cmp-requirements|
+  3. Setup .................................. |lvim-cmp-setup|
+  4. How it works ........................... |lvim-cmp-pipeline|
+  5. Keys ................................... |lvim-cmp-keys|
+  6. API .................................... |lvim-cmp-api|
+  7. Highlights ............................. |lvim-cmp-highlights|
+  8. Health ................................. |lvim-cmp-health|
+
+==============================================================================
+1. INTRODUCTION                                               *lvim-cmp-intro*
+
+lvim-cmp is the completion engine of the lvim-tech set: async LSP completion
+rendered in the canonical lvim-ui cursor-anchored MENU (a non-focusable popup —
+focus never leaves the editing buffer), fuzzy-ranked per keystroke through the
+shared lvim-fuzzy engine, with matched-char highlighting on the visible rows,
+per-kind icon chips, ghost text, and textEdit / snippet / additionalTextEdits-
+correct acceptance.
+
+The current source is LSP; buffer, path and snippet sources are planned
+follow-ups on the same source contract, as are the documentation float and the
+<Tab> chain.
+
+==============================================================================
+2. REQUIREMENTS                                        *lvim-cmp-requirements*
+
+  • Neovim >= 0.11 (client:request, vim.snippet, vim.str_byteindex)
+  • lvim-utils (palette / highlight / merge)
+  • lvim-ui (the `menu` primitive, |lvim-ui.menu()|)
+  • lvim-fuzzy (ranking + match positions)
+  • lvim-pairs — optional, the <CR> fallback handshake
+
+==============================================================================
+3. SETUP                                                      *lvim-cmp-setup*
+
+                                                            *lvim-cmp.setup()*
+require("lvim-cmp").setup({opts})
+
+Merges {opts} into the LIVE config in place (every reader
+`require("lvim-cmp.config")` sees the effective values) and wires the trigger
+autocmds, insert-mode keys and highlight factories. See the README for the
+FULL default config; the option set is documented as `LvimCmpConfig` in
+`lua/lvim-cmp/config.lua` (enabled, debounce_ms, keyword_pattern, trigger,
+fuzzy, sources.lsp, menu, ghost_text, keys).
+
+Start language servers with the lvim-cmp capabilities fragment: >lua
+    local capabilities = vim.tbl_deep_extend(
+        "force",
+        vim.lsp.protocol.make_client_capabilities(),
+        require("lvim-cmp").capabilities()
+    )
+    vim.lsp.config("*", { capabilities = capabilities })
+<
+==============================================================================
+4. HOW IT WORKS                                            *lvim-cmp-pipeline*
+
+The pipeline is trigger → sources → fuzzy → render.
+
+Trigger~
+InsertCharPre only RECORDS the typed character; the driver is TextChangedI
+(a change WITH a recorded char is a typed insertion, one without is a
+deletion — the `show_on_backspace` gate). CursorMovedI is the bounds check for
+non-typing movement; leaving insert mode always tears the session down.
+A server trigger character (e.g. ".") opens a fresh context when
+`trigger.show_on_trigger_chars` is on.
+
+Contexts and staleness~
+A completion CONTEXT is the keyword bounds the query is read from, stamped
+with a monotonic generation id. Every async source response carries the id it
+was requested under and is DROPPED unless it still matches — no stale menu
+ever renders.
+
+The fast path~
+A keystroke INSIDE the current bounds re-ranks the CACHED candidate set — one
+lvim-fuzzy call, no server round-trip. The set is refetched only when the
+response was `isIncomplete` (its items depend on the query) or the cache is
+empty. There is no input debounce by default (`debounce_ms = 0`): the matcher
+is the budget; source responses are emitted vim.schedule'd off the keystroke,
+and a source slower than `sources.lsp.timeout_ms` is dropped for that
+keystroke instead of blocking the menu.
+
+Ranking~
+Candidate filter texts cross into lvim-fuzzy ONCE per response (`prepare`);
+each keystroke is a single `match(query)` call returning lvim-fuzzy's
+deterministic total order (identical on the native and Lua backends). Items
+are pre-sorted by `sortText` so an empty query shows the server's intended
+order. Matched-char columns are computed lazily, only for the menu's VISIBLE
+rows.
+
+Render~
+The lvim-ui `menu` primitive: one long-lived non-focusable window glued to the
+keyword START (it does not shift while typing), direction flip near the screen
+edge, ephemeral decoration-provider highlights on visible rows only, bg-only
+selection bar, scrollbar. Rows are kind chip + label (matched chars
+highlighted) + a dim right detail column.
+
+Accept~
+The replaced range runs from the item's textEdit start (in the client's offset
+encoding) to the current cursor. Snippet-format items expand through
+|vim.snippet|. `completionItem/resolve` runs on accept, so
+`additionalTextEdits` (auto-imports) and the item's command apply.
+
+Ghost text~
+The selected item's REMAINDER is shown inline (dim italic) only when its
+insert text literally starts with what you typed — a fuzzy match has no
+truthful remainder, so nothing wrong is ever overlaid.
+
+==============================================================================
+5. KEYS                                                        *lvim-cmp-keys*
+
+Insert-mode, all configurable via `keys` (each entry is a list of lhs):
+
+  <C-n> / <Down>    select next (wraps; falls through when no menu)
+  <C-p> / <Up>      select previous
+  <CR>              accept the selected item; else the lvim-pairs cr()
+                    handshake when lvim-pairs is present; else a plain <CR>
+  <C-e>             abort (hide the menu)
+  <C-Space>         trigger manually (regardless of keyword length)
+
+==============================================================================
+6. API                                                          *lvim-cmp-api*
+
+require("lvim-cmp").setup({opts})       wire everything (see |lvim-cmp.setup()|)
+require("lvim-cmp").enable()            runtime enable (autocmds + keys)
+require("lvim-cmp").disable()           runtime disable (full teardown)
+require("lvim-cmp").show()              open the menu at the cursor
+require("lvim-cmp").hide()              dismiss the menu, cancel requests
+require("lvim-cmp").accept()            accept the selected item → boolean
+require("lvim-cmp").select({delta})     move the selection → boolean
+require("lvim-cmp").visible()           whether the menu is on screen
+require("lvim-cmp").capabilities()      LSP client_capabilities fragment
+
+==============================================================================
+7. HIGHLIGHTS                                            *lvim-cmp-highlights*
+
+All groups are palette-bound (re-derived on ColorScheme / palette sync):
+
+  LvimCmpMatch        matched query chars inside a label (red, bold)
+  LvimCmpDetail       the dim right detail column
+  LvimCmpGhost        the inline ghost-text remainder (dim italic)
+  LvimCmpKind{Name}   one chip group per CompletionItemKind (accent fg over a
+                      soft tint of the same accent), e.g. LvimCmpKindFunction
+
+The menu chrome itself (LvimUiMenuNormal / Sel / Thumb / Track) belongs to the
+lvim-ui `menu` preset — see |lvim-ui.menu()|.
+
+==============================================================================
+8. HEALTH                                                    *lvim-cmp-health*
+
+Run `:checkhealth lvim-cmp`. It reports the Neovim requirement, the shared
+dependencies (including WHICH lvim-fuzzy backend loaded), whether the trigger
+autocmds and keymaps are wired, the current buffer's completion-capable
+clients, and validates the live config.
+
+vim:tw=78:ts=8:ft=help:norl:
