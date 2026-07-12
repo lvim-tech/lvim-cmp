@@ -24,12 +24,6 @@
 ---@field max_items integer?             cap the items taken from this source (nil = all)
 ---@field timeout_ms integer             emit what has arrived after this long; a late client is dropped
 
----@class LvimCmpSnippetsSourceConfig
----@field enabled boolean
----@field priority integer
----@field min_keyword_length integer
----@field paths string[]                 extra VS Code-format collection roots (stdpath("config")/snippets is always scanned)
-
 ---@class LvimCmpPathSourceConfig
 ---@field enabled boolean
 ---@field priority integer
@@ -97,9 +91,11 @@
 ---@field docs_scroll_down string[]        scroll the docs float down (no-op → fall back) while it is open
 ---@field docs_scroll_up string[]          scroll the docs float up (no-op → fall back) while it is open
 
----@class LvimCmpSourcesConfig
+---@class LvimCmpSourcesConfig                the three built-in sources; an EXTERNAL source
+--- registered via `require("lvim-cmp").register_source(src, opts)` stores its own config
+--- under `sources.<src.name>` (opts merged over `{ enabled = true, priority = 50 }`) —
+--- snippets, for example, come from the lvim-snippets plugin this way.
 ---@field lsp LvimCmpLspSourceConfig
----@field snippets LvimCmpSnippetsSourceConfig
 ---@field path LvimCmpPathSourceConfig
 ---@field buffer LvimCmpBufferSourceConfig
 
@@ -135,12 +131,6 @@ local M = {
             min_keyword_length = 1,
             max_items = nil,
             timeout_ms = 400,
-        },
-        snippets = {
-            enabled = true,
-            priority = 80,
-            min_keyword_length = 1,
-            paths = {},
         },
         path = {
             enabled = true,

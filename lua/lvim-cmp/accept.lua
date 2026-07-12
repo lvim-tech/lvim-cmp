@@ -70,10 +70,16 @@ function M.apply(item, ctx)
 
     local text, is_snippet = insert_text(item.raw)
     if is_snippet then
-        -- clear the typed range, land the cursor at its start, expand natively
+        -- clear the typed range, land the cursor at its start, then expand. `item.expand` is a
+        -- custom expander (LuaSnip snippet items set it — vim.snippet can't drive their
+        -- function/dynamic nodes); everything else expands through native vim.snippet.
         api.nvim_buf_set_text(bufnr, row, scol, row, ecol, { "" })
         api.nvim_win_set_cursor(0, { row + 1, scol })
-        vim.snippet.expand(text)
+        if type(item.expand) == "function" then
+            item.expand()
+        else
+            vim.snippet.expand(text)
+        end
     else
         local lines = vim.split(text, "\n", { plain = true })
         api.nvim_buf_set_text(bufnr, row, scol, row, ecol, lines)

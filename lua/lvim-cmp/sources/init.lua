@@ -1,5 +1,6 @@
--- lvim-cmp.sources: the source registry — lsp / snippets / path / buffer behind one
--- contract (enabled / trigger_chars / get / resolve / execute). Fan-out policy lives
+-- lvim-cmp.sources: the source registry — lsp / path / buffer built-in, plus any EXTERNAL
+-- source registered at runtime (e.g. lvim-snippets), behind one contract (enabled /
+-- trigger_chars / get / resolve / execute). Fan-out policy lives
 -- here: sources run in config-priority order (the merge order among equal fuzzy
 -- scores), a per-source `min_keyword_length` floor gates them (bypassed by a manual
 -- trigger, or by a trigger character THE SOURCE ITSELF declares — a "/" context must
@@ -13,9 +14,9 @@
 
 local config = require("lvim-cmp.config")
 local lsp_source = require("lvim-cmp.sources.lsp")
-local snippets_source = require("lvim-cmp.sources.snippets")
 local path_source = require("lvim-cmp.sources.path")
 local buffer_source = require("lvim-cmp.sources.buffer")
+local merge = require("lvim-utils.utils").merge
 
 local M = {}
 
@@ -30,6 +31,7 @@ local M = {}
 ---@field icon string?                per-item chip glyph override (path devicons)
 ---@field icon_hl string?             highlight group for the chip override
 ---@field resolved boolean?           completionItem/resolve already ran (docs prefetch → accept reuse)
+---@field expand? fun()               custom snippet expander (LuaSnip items) — replaces vim.snippet.expand at accept
 
 ---@class LvimCmpSource               the source contract every sources/<name>.lua module implements
 ---@field name string
@@ -42,13 +44,42 @@ local M = {}
 --- The registered sources (order here is the stable tiebreak; fan-out re-sorts by the
 --- LIVE config priority, so a setup()-time priority change takes effect immediately).
 ---@type LvimCmpSource[]
-local providers = { lsp_source, snippets_source, path_source, buffer_source }
+local providers = { lsp_source, path_source, buffer_source }
 
 --- The per-source config table for `name` (empty for an unknown source).
 ---@param name string
 ---@return table
 local function source_config(name)
     return config.sources[name] or {}
+end
+
+--- Register an EXTERNAL completion source at runtime (the public entry point is
+--- `require("lvim-cmp").register_source`). `source` implements the LvimCmpSource contract
+--- (name / enabled / get, plus optional trigger_chars / resolve / execute); `opts` is its
+--- per-source config, merged in place into `config.sources[source.name]` so the fan-out's
+--- priority / keyword-floor / fallback logic and `source_config` pick it up with no extra
+--- wiring. Re-registering the same NAME REPLACES the source (hot-reload friendly), and a
+--- built-in name may be overridden the same way. The new source joins `M.list()` /
+--- `M.trigger_chars()` / `M.fanout()` automatically.
+---@param source LvimCmpSource
+---@param opts? table  priority / enabled / min_keyword_length / trigger-floor / fallback_for / …
+function M.register(source, opts)
+    assert(type(source) == "table", "lvim-cmp.register: source must be a table")
+    assert(
+        type(source.name) == "string" and source.name ~= "",
+        "lvim-cmp.register: source.name (a non-empty string) is required"
+    )
+    assert(type(source.enabled) == "function", "lvim-cmp.register: source.enabled(ctx) must be a function")
+    assert(type(source.get) == "function", "lvim-cmp.register: source.get(ctx, cb) must be a function")
+    -- merge the source's config over a sane default so it slots into the priority ordering
+    config.sources[source.name] = merge(config.sources[source.name] or { enabled = true, priority = 50 }, opts or {})
+    for i, p in ipairs(providers) do
+        if p.name == source.name then
+            providers[i] = source -- replace an existing source of the same name
+            return
+        end
+    end
+    providers[#providers + 1] = source
 end
 
 --- Every registered source, in effective priority order (highest first; registry order

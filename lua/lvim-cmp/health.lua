@@ -3,9 +3,9 @@
 -- (vim.snippet, client:request), the shared dependencies (lvim-ui menu preset,
 -- lvim-fuzzy + which matcher backend actually loaded, lvim-utils palette), whether the
 -- trigger autocmds/keymaps are wired, an internally inconsistent config, and every
--- source's live status (the current buffer's completion-capable clients, the snippet
--- collections discovered — including unparsable files, the buffer word-index stats).
--- Read-only.
+-- source's live status (the current buffer's completion-capable clients, the buffer
+-- word-index stats, any external sources registered via register_source — e.g. the
+-- lvim-snippets "snippets" source). Read-only.
 --
 ---@module "lvim-cmp.health"
 
@@ -157,23 +157,6 @@ function M.check()
         health.info("source lsp: disabled")
     end
 
-    if config.sources.snippets.enabled then
-        local stats = require("lvim-cmp.sources.snippets").stats()
-        if stats.files > 0 then
-            health.ok(("source snippets: %d file(s) across %d language(s)"):format(stats.files, stats.languages))
-        else
-            health.info(
-                "source snippets: no VS Code-format collection found "
-                    .. '(stdpath("config")/snippets or sources.snippets.paths)'
-            )
-        end
-        for _, path in ipairs(stats.broken) do
-            health.warn(("source snippets: unparsable JSON skipped: %s"):format(path))
-        end
-    else
-        health.info("source snippets: disabled")
-    end
-
     if config.sources.path.enabled then
         health.ok('source path: enabled (trigger characters "/" and "~")')
     else
@@ -191,6 +174,22 @@ function M.check()
         )
     else
         health.info("source buffer: disabled")
+    end
+
+    -- registered EXTERNAL sources (via register_source) — anything beyond the three
+    -- built-ins (the lvim-snippets "snippets" source shows up here)
+    local builtin = { lsp = true, path = true, buffer = true }
+    local external = {}
+    for _, src in ipairs(require("lvim-cmp.sources").list()) do
+        if not builtin[src.name] then
+            external[#external + 1] = ("%s (priority %d)"):format(
+                src.name,
+                (config.sources[src.name] or {}).priority or 0
+            )
+        end
+    end
+    if #external > 0 then
+        health.ok(("%d external source(s) registered: %s"):format(#external, table.concat(external, ", ")))
     end
 
     check_config(health)

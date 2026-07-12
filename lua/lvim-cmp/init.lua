@@ -1,5 +1,6 @@
 -- lvim-cmp: the completion engine of the lvim-tech set. Async multi-source completion
--- (LSP, VS Code-format snippets, filesystem paths, buffer words) rendered in the
+-- (LSP, filesystem paths, buffer words built-in; snippets and anything else join through
+-- the public register_source API — lvim-snippets registers itself that way) rendered in the
 -- canonical lvim-ui `menu` primitive (cursor-anchored, non-focusable), fuzzy-ranked per
 -- keystroke through the shared lvim-fuzzy engine (deterministic across its native/Lua
 -- backends), with matched-char highlighting on visible rows, a resolved-documentation
@@ -16,6 +17,7 @@
 --   M.select(delta)      – move the selection
 --   M.visible()          – whether the menu is on screen
 --   M.capabilities()     – LSP client_capabilities fragment for lsp setup
+--   M.register_source(s) – register an EXTERNAL completion source (third-party module)
 --
 ---@module "lvim-cmp"
 
@@ -24,6 +26,7 @@ local engine = require("lvim-cmp.engine")
 local trigger = require("lvim-cmp.trigger")
 local keymaps = require("lvim-cmp.keymaps")
 local highlights = require("lvim-cmp.highlights")
+local sources = require("lvim-cmp.sources")
 local merge = require("lvim-utils.utils").merge
 
 local M = {}
@@ -115,6 +118,28 @@ function M.capabilities()
             },
         },
     }
+end
+
+--- Register an EXTERNAL completion source — a third-party module (snippets via
+--- lvim-snippets, git, cmdline, DB schema, emoji, calc, …) implementing the
+--- LvimCmpSource contract: required `name` (string),
+--- `enabled(ctx)` and `get(ctx, cb)`; optional `trigger_chars(bufnr)`, `resolve(item, cb)`,
+--- `execute(item, bufnr)`. `opts` is the source's per-source config (`priority` — merge
+--- rank, `enabled`, `min_keyword_length`, `fallback_for`, …) stored under
+--- `config.sources[source.name]`. Registering an existing name REPLACES it. Call after
+--- `setup()`.
+---
+--- ```lua
+--- require("lvim-cmp").register_source({
+---     name = "emoji",
+---     enabled = function() return true end,
+---     get = function(ctx, cb) cb({ --[[ LvimCmpItem[] ]] }, false) end,
+--- }, { priority = 40, min_keyword_length = 2 })
+--- ```
+---@param source LvimCmpSource
+---@param opts? table
+function M.register_source(source, opts)
+    sources.register(source, opts)
 end
 
 return M

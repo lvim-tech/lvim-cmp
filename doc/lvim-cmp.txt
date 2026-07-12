@@ -25,9 +25,10 @@ on the visible rows, per-kind icon chips, a documentation float beside the
 menu, ghost text, and textEdit / snippet / additionalTextEdits-correct
 acceptance.
 
-Sources (one shared contract, merged by source priority): LSP, snippets
-(VS Code-format collections expanded through |vim.snippet|), path (filesystem
-completion on "/" and "~") and buffer (words from open buffers). See
+Sources (one shared contract, merged by source priority): LSP, path
+(filesystem completion on "/" and "~") and buffer (words from open buffers)
+built-in; snippet completion comes from the lvim-snippets plugin, which
+registers its "snippets" source through |lvim-cmp.register_source()|. See
 |lvim-cmp-sources|. The <Tab> chain and per-filetype source overrides are
 planned follow-ups.
 
@@ -40,6 +41,8 @@ planned follow-ups.
   • lvim-fuzzy (ranking + match positions)
   • lvim-pairs — optional, the <CR> fallback handshake
   • lvim-icons — optional, devicon chips in path completion
+  • lvim-snippets — optional, snippet completion (registers itself via
+    |lvim-cmp.register_source()|)
 
 ==============================================================================
 3. SETUP                                                      *lvim-cmp-setup*
@@ -52,7 +55,7 @@ Merges {opts} into the LIVE config in place (every reader
 autocmds, insert-mode keys and highlight factories. See the README for the
 FULL default config; the option set is documented as `LvimCmpConfig` in
 `lua/lvim-cmp/config.lua` (enabled, debounce_ms, keyword_pattern, trigger,
-fuzzy, sources.{lsp,snippets,path,buffer}, menu, docs, ghost_text, keys).
+fuzzy, sources.{lsp,path,buffer}, menu, docs, ghost_text, keys).
 
 Start language servers with the lvim-cmp capabilities fragment: >lua
     local capabilities = vim.tbl_deep_extend(
@@ -125,8 +128,10 @@ a blue bar. All four tint factors (`row`, `row_selected`, `chip`,
 
 Accept~
 The replaced range runs from the item's textEdit start (in the client's offset
-encoding) to the current cursor. Snippet-format items (LSP or the snippets
-source) expand through |vim.snippet|. `completionItem/resolve` runs on accept
+encoding) to the current cursor. Snippet-format items (LSP or any snippet
+source) expand through |vim.snippet| — unless the item carries its own
+`expand` function (lvim-snippets LuaSnip records), which runs instead.
+`completionItem/resolve` runs on accept
 (reusing the docs float's cached resolve), so `additionalTextEdits`
 (auto-imports) and the item's command apply.
 
@@ -144,15 +149,15 @@ cancellation, a `timeout_ms` straggler drop, `isIncomplete` bookkeeping and
 `completionList.itemDefaults` folding. TriggerCharacter requests (kind 2) are
 sent only to clients that DECLARED the typed character.
 
-snippets~
-VS Code-format snippet collections. Discovery scans
-`stdpath("config")/snippets` plus every `sources.snippets.paths` root (and
-their immediate subdirectories):
-a directory with a `package.json` manifest maps files per its
-`contributes.snippets`; loose `<filetype>.json` files map by basename; the
-language "all" applies to every filetype. Files parse lazily, once per
-filetype per session. A snippet's description + body feed the documentation
-float; accepting expands through |vim.snippet| (placeholders, jumps).
+snippets (external — lvim-snippets)~
+Snippet completion lives in the lvim-snippets plugin: the VS Code / SnipMate /
+LuaSnip collection engine plus the :LvimSnippets picker. On its setup() it
+registers a "snippets" source here through |lvim-cmp.register_source()| —
+nothing to wire in lvim-cmp. Its items expand through the standard accept path
+(|vim.snippet|, or the item's own `expand` for LuaSnip records), and its
+format-priority rank rides in each item's sort_text as the equal-fuzzy
+tiebreak. Collections, folders, formats and priority are configured in
+lvim-snippets' own setup(); see its help file and `:checkhealth lvim-snippets`.
 
 path~
 Filesystem completion. "/" and "~" are its trigger characters; the path token
@@ -172,6 +177,18 @@ pays a full scan. Words shorter than `min_word_length` never enter the index;
 buffers over `max_buffer_size` bytes are skipped; words deduplicate across
 buffers and the word being typed never completes to itself. With the default
 `fallback_for = { "lsp" }` it runs only when the LSP source returned nothing.
+
+custom~
+The built-ins above are not the whole story: register your OWN source (git,
+cmdline, a DB-schema source, emoji, calc, …) at runtime with
+|lvim-cmp.register_source()| — the lvim-snippets source arrives through
+exactly this seam. A source is any table implementing the contract:
+required `name`, `enabled(ctx)`, `get(ctx, cb)`; optional
+`trigger_chars(bufnr)`, `resolve(item, cb)`, `execute(item, bufnr)`. It joins
+the same priority-ordered fan-out as the built-ins; its per-source config lives
+under `sources.<name>` (merged over `{ enabled = true, priority = 50 }`).
+Registering an existing name (built-in or external) REPLACES it, so a source
+can be swapped or hot-reloaded. Registered sources show in |lvim-cmp-health|.
 
 ==============================================================================
 6. DOCUMENTATION FLOAT                                         *lvim-cmp-docs*
@@ -218,6 +235,20 @@ require("lvim-cmp").select({delta})     move the selection → boolean
 require("lvim-cmp").visible()           whether the menu is on screen
 require("lvim-cmp").capabilities()      LSP client_capabilities fragment
 
+                                                    *lvim-cmp.register_source()*
+require("lvim-cmp").register_source({source}, {opts})
+        Register an EXTERNAL completion source (third-party module). {source}
+        implements the contract in |lvim-cmp-sources| "custom"; {opts} is its
+        per-source config (`priority`, `enabled`, `min_keyword_length`, …)
+        stored under `sources.<source.name>`. Re-registering a name replaces
+        it. Call after |lvim-cmp.setup()|. >lua
+            require("lvim-cmp").register_source({
+                name = "emoji",
+                enabled = function() return true end,
+                get = function(ctx, cb) cb({}, false) end,
+            }, { priority = 40, min_keyword_length = 2 })
+<
+
 ==============================================================================
 9. HIGHLIGHTS                                            *lvim-cmp-highlights*
 
@@ -243,8 +274,8 @@ lvim-ui `menu` preset — see |lvim-ui.menu()|.
 Run `:checkhealth lvim-cmp`. It reports the Neovim requirement, the shared
 dependencies (including WHICH lvim-fuzzy backend loaded), whether the trigger
 autocmds and keymaps are wired, every source's live status (the current
-buffer's completion-capable clients, the snippet collections discovered —
-including unparsable files, the buffer word-index statistics), and validates
-the live config.
+buffer's completion-capable clients, the buffer word-index statistics, the
+registered external sources — the lvim-snippets "snippets" source shows up
+there), and validates the live config.
 
 vim:tw=78:ts=8:ft=help:norl:

@@ -7,9 +7,11 @@ pure-Lua backends), with matched-char highlighting on the visible rows, kind chi
 family, a documentation float beside the menu, ghost text, and `textEdit` / snippet /
 `additionalTextEdits`-correct acceptance.
 
-Sources: **LSP**, **snippets** (VS Code-format collections, expanded natively through `vim.snippet`),
-**path** (filesystem completion on `/` and `~`) and **buffer** (words from open buffers) — all on one
-source contract, merged by source priority.
+Sources: **LSP**, **path** (filesystem completion on `/` and `~`) and **buffer** (words from open
+buffers) built-in — all on one source contract, merged by source priority, and extensible with your own
+[custom sources](#custom-sources). **Snippet** completion comes from
+[lvim-snippets](https://github.com/lvim-tech/lvim-snippets), which registers its `snippets` source
+through that same public API.
 
 ## Highlights
 
@@ -44,18 +46,19 @@ source contract, merged by source priority.
 - **Path completion** — `/` and `~` open it; relative prefixes resolve against the current file's
   directory AND the cwd; directories rank first, carry the Folder kind and a trailing slash on accept;
   file chips upgrade to their lvim-icons devicon when that plugin is present.
-- **Snippet collections** — VS Code-format JSON (a `package.json` manifest with `contributes.snippets`,
-  or loose `<filetype>.json` files; the language `all` applies everywhere) discovered under
-  `stdpath("config")/snippets` and any configured extra roots; parsed lazily per filetype, expanded
-  through native `vim.snippet` on accept.
+- **Snippet-correct acceptance for any source** — an item with `insertTextFormat = 2` expands through
+  native `vim.snippet` (tabstops jump on `<Tab>`), and an item carrying its own `expand` function (the
+  lvim-snippets LuaSnip records) runs it instead — the accept path is the seam snippet sources plug
+  into, no snippet code lives here.
 
 ## Requirements
 
 Requires **Neovim >= 0.11**, [lvim-utils](https://github.com/lvim-tech/lvim-utils),
 [lvim-ui](https://github.com/lvim-tech/lvim-ui) (the `menu` primitive) and
 [lvim-fuzzy](https://github.com/lvim-tech/lvim-fuzzy) (ranking + match positions).
-[lvim-pairs](https://github.com/lvim-tech/lvim-pairs) is optional (the `<CR>` fallback handshake), and
-so is [lvim-icons](https://github.com/lvim-tech/lvim-icons) (devicon chips in path completion).
+[lvim-pairs](https://github.com/lvim-tech/lvim-pairs) is optional (the `<CR>` fallback handshake), so is
+[lvim-icons](https://github.com/lvim-tech/lvim-icons) (devicon chips in path completion), and so is
+[lvim-snippets](https://github.com/lvim-tech/lvim-snippets) (snippet completion — it registers itself).
 
 ## Installation
 
@@ -126,6 +129,7 @@ require("lvim-cmp").setup({
     },
     fuzzy = {
         max_results = 200, -- ranked items materialised per keystroke
+        prefix_boost = 16, -- score added to literal case-insensitive PREFIX matches (0 disables)
     },
     sources = {
         lsp = {
@@ -134,12 +138,6 @@ require("lvim-cmp").setup({
             min_keyword_length = 1, -- per-source floor (this source's trigger characters bypass it)
             max_items = nil, -- cap items taken from this source (nil = all)
             timeout_ms = 400, -- emit what has arrived after this long
-        },
-        snippets = {
-            enabled = true,
-            priority = 80,
-            min_keyword_length = 1,
-            paths = {}, -- extra VS Code-format roots; stdpath("config")/snippets is always scanned
         },
         path = {
             enabled = true,
@@ -211,12 +209,49 @@ require("lvim-cmp").setup({
 })
 ```
 
+## Snippets
+
+Snippet completion lives in its own plugin,
+[lvim-snippets](https://github.com/lvim-tech/lvim-snippets) — the VS Code / SnipMate / LuaSnip
+collection engine plus the `:LvimSnippets` picker. On its `setup()` it registers a `snippets` source
+into lvim-cmp through the public [`register_source`](#custom-sources) API (nothing to wire here), the
+items expand through the standard accept path (`vim.snippet`, or the item's own `expand` for LuaSnip
+records), and its format-priority rank rides in each item's `sort_text` as the equal-fuzzy tiebreak.
+Collections, folders, formats and their priority are configured in **lvim-snippets**' own `setup()`;
+`:checkhealth lvim-snippets` reports the discovered files.
+
+## Custom sources
+
+The three built-in sources (LSP, path, buffer) are not the whole story — you can register your own
+EXTERNAL source (git, cmdline, a database-schema source, emoji, calc, …) at runtime; snippets via
+lvim-snippets arrive through exactly this seam. A source is any table implementing the source contract:
+required `name` (string), `enabled(ctx)` and `get(ctx, cb)`; optional `trigger_chars(bufnr)`,
+`resolve(item, cb)`, `execute(item, bufnr)`. Register it after `setup()`:
+
+```lua
+require("lvim-cmp").register_source({
+    name = "emoji",
+    enabled = function()
+        return true
+    end,
+    -- cb(items, incomplete): items are LvimCmpItem tables (label, filter_text, kind, …)
+    get = function(ctx, cb)
+        cb({}, false)
+    end,
+}, { priority = 40, min_keyword_length = 2 })
+```
+
+`opts` is the source's per-source config — `priority` (merge rank among equal fuzzy scores),
+`enabled`, `min_keyword_length`, `fallback_for`, … — stored under `sources.<name>` and honoured by the
+same fan-out as the built-ins. Registering an existing name (built-in or external) **replaces** it, so a
+source can be swapped or hot-reloaded. Registered external sources appear in `:checkhealth lvim-cmp`.
+
 ## Health
 
 `:checkhealth lvim-cmp` reports the runtime requirement, the shared dependencies (including WHICH
 lvim-fuzzy backend loaded), whether the trigger autocmds / keymaps are wired, every source's live status
-(the current buffer's completion-capable clients, the snippet collections discovered — including
-unparsable files, the buffer word-index statistics), and validates the live config.
+(the current buffer's completion-capable clients, the buffer word-index statistics, the registered
+external sources — the lvim-snippets `snippets` source shows up there), and validates the live config.
 
 ## License
 
