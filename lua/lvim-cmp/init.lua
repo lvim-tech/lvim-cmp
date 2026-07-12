@@ -1,9 +1,11 @@
--- lvim-cmp: the completion engine of the lvim-tech set. Async LSP completion rendered
--- in the canonical lvim-ui `menu` primitive (cursor-anchored, non-focusable), fuzzy-
--- ranked per keystroke through the shared lvim-fuzzy engine (deterministic across its
--- native/Lua backends), with matched-char highlighting on visible rows, ghost text, and
--- textEdit/snippet/additionalTextEdits-correct acceptance. This module owns setup() and
--- the small public API; the moving parts live in engine/trigger/sources/menu.
+-- lvim-cmp: the completion engine of the lvim-tech set. Async multi-source completion
+-- (LSP, VS Code-format snippets, filesystem paths, buffer words) rendered in the
+-- canonical lvim-ui `menu` primitive (cursor-anchored, non-focusable), fuzzy-ranked per
+-- keystroke through the shared lvim-fuzzy engine (deterministic across its native/Lua
+-- backends), with matched-char highlighting on visible rows, a resolved-documentation
+-- float in the menu's sibling slot, ghost text, and textEdit/snippet/
+-- additionalTextEdits-correct acceptance. This module owns setup() and the small public
+-- API; the moving parts live in engine/trigger/sources/menu/docs.
 --
 -- Public API:
 --   M.setup(opts)        – merge options into the live config and wire everything

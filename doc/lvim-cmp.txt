@@ -7,24 +7,29 @@ CONTENTS                                                            *lvim-cmp*
   2. Requirements ........................... |lvim-cmp-requirements|
   3. Setup .................................. |lvim-cmp-setup|
   4. How it works ........................... |lvim-cmp-pipeline|
-  5. Keys ................................... |lvim-cmp-keys|
-  6. API .................................... |lvim-cmp-api|
-  7. Highlights ............................. |lvim-cmp-highlights|
-  8. Health ................................. |lvim-cmp-health|
+  5. Sources ................................ |lvim-cmp-sources|
+  6. Documentation float .................... |lvim-cmp-docs|
+  7. Keys ................................... |lvim-cmp-keys|
+  8. API .................................... |lvim-cmp-api|
+  9. Highlights ............................. |lvim-cmp-highlights|
+ 10. Health ................................. |lvim-cmp-health|
 
 ==============================================================================
 1. INTRODUCTION                                               *lvim-cmp-intro*
 
-lvim-cmp is the completion engine of the lvim-tech set: async LSP completion
-rendered in the canonical lvim-ui cursor-anchored MENU (a non-focusable popup —
-focus never leaves the editing buffer), fuzzy-ranked per keystroke through the
-shared lvim-fuzzy engine, with matched-char highlighting on the visible rows,
-per-kind icon chips, ghost text, and textEdit / snippet / additionalTextEdits-
-correct acceptance.
+lvim-cmp is the completion engine of the lvim-tech set: async multi-source
+completion rendered in the canonical lvim-ui cursor-anchored MENU (a
+non-focusable popup — focus never leaves the editing buffer), fuzzy-ranked per
+keystroke through the shared lvim-fuzzy engine, with matched-char highlighting
+on the visible rows, per-kind icon chips, a documentation float beside the
+menu, ghost text, and textEdit / snippet / additionalTextEdits-correct
+acceptance.
 
-The current source is LSP; buffer, path and snippet sources are planned
-follow-ups on the same source contract, as are the documentation float and the
-<Tab> chain.
+Sources (one shared contract, merged by source priority): LSP, snippets
+(VS Code-format collections expanded through |vim.snippet|), path (filesystem
+completion on "/" and "~") and buffer (words from open buffers). See
+|lvim-cmp-sources|. The <Tab> chain and per-filetype source overrides are
+planned follow-ups.
 
 ==============================================================================
 2. REQUIREMENTS                                        *lvim-cmp-requirements*
@@ -34,6 +39,7 @@ follow-ups on the same source contract, as are the documentation float and the
   • lvim-ui (the `menu` primitive, |lvim-ui.menu()|)
   • lvim-fuzzy (ranking + match positions)
   • lvim-pairs — optional, the <CR> fallback handshake
+  • lvim-icons — optional, devicon chips in path completion
 
 ==============================================================================
 3. SETUP                                                      *lvim-cmp-setup*
@@ -46,7 +52,7 @@ Merges {opts} into the LIVE config in place (every reader
 autocmds, insert-mode keys and highlight factories. See the README for the
 FULL default config; the option set is documented as `LvimCmpConfig` in
 `lua/lvim-cmp/config.lua` (enabled, debounce_ms, keyword_pattern, trigger,
-fuzzy, sources.lsp, menu, ghost_text, keys).
+fuzzy, sources.{lsp,snippets,path,buffer}, menu, docs, ghost_text, keys).
 
 Start language servers with the lvim-cmp capabilities fragment: >lua
     local capabilities = vim.tbl_deep_extend(
@@ -66,8 +72,8 @@ InsertCharPre only RECORDS the typed character; the driver is TextChangedI
 (a change WITH a recorded char is a typed insertion, one without is a
 deletion — the `show_on_backspace` gate). CursorMovedI is the bounds check for
 non-typing movement; leaving insert mode always tears the session down.
-A server trigger character (e.g. ".") opens a fresh context when
-`trigger.show_on_trigger_chars` is on.
+A source trigger character (a server's ".", the path source's "/" and "~")
+opens a fresh context when `trigger.show_on_trigger_chars` is on.
 
 Contexts and staleness~
 A completion CONTEXT is the keyword bounds the query is read from, stamped
@@ -84,26 +90,45 @@ is the budget; source responses are emitted vim.schedule'd off the keystroke,
 and a source slower than `sources.lsp.timeout_ms` is dropped for that
 keystroke instead of blocking the menu.
 
+Fan-out and merging~
+Every eligible source is queried per context and answers exactly once. A
+source's `min_keyword_length` floor gates it — bypassed by <C-Space> and by a
+trigger character THE SOURCE ITSELF declares (path's "/" never fans out to a
+server that did not ask for "/"). A source with `fallback_for` waits for the
+listed sources and runs only when they ALL returned 0 items (a flat list, not
+a graph) — by default buffer words appear only where the LSP had nothing.
+Buckets merge in source-priority order as responses arrive.
+
 Ranking~
-Candidate filter texts cross into lvim-fuzzy ONCE per response (`prepare`);
-each keystroke is a single `match(query)` call returning lvim-fuzzy's
-deterministic total order (identical on the native and Lua backends). Items
-are pre-sorted by `sortText` so an empty query shows the server's intended
-order. Matched-char columns are computed lazily, only for the menu's VISIBLE
-rows.
+The merged candidate filter texts cross into lvim-fuzzy ONCE per response
+(`prepare`); each keystroke is a single `match(query)` call returning
+lvim-fuzzy's deterministic total order (identical on the native and Lua
+backends). Within a source, items are pre-sorted by `sortText`, and sources
+concatenate by priority — so the index tiebreak among equal fuzzy scores is
+source priority, then the server's intended order. Matched-char columns are
+computed lazily, only for the menu's VISIBLE rows.
 
 Render~
 The lvim-ui `menu` primitive: one long-lived non-focusable window glued to the
 keyword START (it does not shift while typing), direction flip near the screen
-edge, ephemeral decoration-provider highlights on visible rows only, bg-only
-selection bar, scrollbar. Rows are kind chip + label (matched chars
-highlighted) + a dim right detail column.
+edge, ephemeral decoration-provider highlights on visible rows only, scrollbar.
+Every row is coloured by its KIND accent (a self-tinting legend): a kind chip
+(`menu.icon_padding` spaces around the glyph, default 2+2) + the label in the
+accent (`menu.label_padding`, default 1+1; the window shifts left by the chip +
+label padding so the label TEXT lands on the keyword) with matched chars in
+red + an optional right column (`menu.detail`): "kind" (default) shows the kind
+name in the accent (bold), "lsp" the LSP detail's first line, false drops it.
+The WHOLE row carries a faint accent-tinted background (`menu.tint.row`); the
+cursor row is a STRONGER tint of its OWN colour (`menu.tint.row_selected`) — not
+a blue bar. All four tint factors (`row`, `row_selected`, `chip`,
+`chip_selected`) are configurable.
 
 Accept~
 The replaced range runs from the item's textEdit start (in the client's offset
-encoding) to the current cursor. Snippet-format items expand through
-|vim.snippet|. `completionItem/resolve` runs on accept, so
-`additionalTextEdits` (auto-imports) and the item's command apply.
+encoding) to the current cursor. Snippet-format items (LSP or the snippets
+source) expand through |vim.snippet|. `completionItem/resolve` runs on accept
+(reusing the docs float's cached resolve), so `additionalTextEdits`
+(auto-imports) and the item's command apply.
 
 Ghost text~
 The selected item's REMAINDER is shown inline (dim italic) only when its
@@ -111,7 +136,59 @@ insert text literally starts with what you typed — a fuzzy match has no
 truthful remainder, so nothing wrong is ever overlaid.
 
 ==============================================================================
-5. KEYS                                                        *lvim-cmp-keys*
+5. SOURCES                                                  *lvim-cmp-sources*
+
+lsp~
+textDocument/completion over every attached client that offers it, with
+cancellation, a `timeout_ms` straggler drop, `isIncomplete` bookkeeping and
+`completionList.itemDefaults` folding. TriggerCharacter requests (kind 2) are
+sent only to clients that DECLARED the typed character.
+
+snippets~
+VS Code-format snippet collections. Discovery scans
+`stdpath("config")/snippets` plus every `sources.snippets.paths` root (and
+their immediate subdirectories):
+a directory with a `package.json` manifest maps files per its
+`contributes.snippets`; loose `<filetype>.json` files map by basename; the
+language "all" applies to every filetype. Files parse lazily, once per
+filetype per session. A snippet's description + body feed the documentation
+float; accepting expands through |vim.snippet| (placeholders, jumps).
+
+path~
+Filesystem completion. "/" and "~" are its trigger characters; the path token
+before the keyword decides what is listed: a token ending in "/" lists that
+directory (absolute, "~/", or relative — resolved against the current file's
+directory AND the cwd, deduplicated), a bare "~" lists $HOME (inserting
+"/name" so the text composes to "~/name"). Directories list first, carry the
+Folder kind and (with `trailing_slash`) a "/" on accept; files upgrade their
+chip to the lvim-icons devicon when available.
+
+buffer~
+Words from open buffers, per the configured scope (`buffers` = "current" |
+"visible" | "all"). Each buffer owns a keyword index keyed by its changedtick:
+a fresh tick is served from cache, a stale one serves the PREVIOUS words and
+re-scans after `index_debounce_ms` of typing pause — continuous typing never
+pays a full scan. Words shorter than `min_word_length` never enter the index;
+buffers over `max_buffer_size` bytes are skipped; words deduplicate across
+buffers and the word being typed never completes to itself. With the default
+`fallback_for = { "lsp" }` it runs only when the LSP source returned nothing.
+
+==============================================================================
+6. DOCUMENTATION FLOAT                                         *lvim-cmp-docs*
+
+When a selection settles (`docs.delay` ms while the float is closed,
+`docs.update_delay` while it is open), the selected item resolves
+(completionItem/resolve — cached on the item, so accepting reuses it) and its
+detail + documentation render as markdown in the menu's sibling slot, docked
+flush beside the popup behind the canonical inter-panel divider (see
+|lvim-ui.menu()|). A detail the documentation already repeats is skipped;
+EMPTY documentation hides the float instead of showing a blank box. <C-d>
+toggles the float and mutes/unmutes auto-docs for the session — with
+`docs.auto = false` it is the way to peek on demand. <C-f>/<C-b> scroll the
+open float.
+
+==============================================================================
+7. KEYS                                                        *lvim-cmp-keys*
 
 Insert-mode, all configurable via `keys` (each entry is a list of lhs):
 
@@ -120,10 +197,16 @@ Insert-mode, all configurable via `keys` (each entry is a list of lhs):
   <CR>              accept the selected item; else the lvim-pairs cr()
                     handshake when lvim-pairs is present; else a plain <CR>
   <C-e>             abort (hide the menu)
-  <C-Space>         trigger manually (regardless of keyword length)
+  <C-Space>         trigger manually (bypasses keyword length and every
+                    per-source floor)
+  <C-d>             toggle the documentation float (|lvim-cmp-docs|)
+  <Tab> / <S-Tab>   snippet jump forward/backward → select next/previous →
+                    fall back to the raw key
+  <C-f> / <C-b>     scroll the open documentation float down/up (no float →
+                    the raw key)
 
 ==============================================================================
-6. API                                                          *lvim-cmp-api*
+8. API                                                          *lvim-cmp-api*
 
 require("lvim-cmp").setup({opts})       wire everything (see |lvim-cmp.setup()|)
 require("lvim-cmp").enable()            runtime enable (autocmds + keys)
@@ -136,25 +219,32 @@ require("lvim-cmp").visible()           whether the menu is on screen
 require("lvim-cmp").capabilities()      LSP client_capabilities fragment
 
 ==============================================================================
-7. HIGHLIGHTS                                            *lvim-cmp-highlights*
+9. HIGHLIGHTS                                            *lvim-cmp-highlights*
 
-All groups are palette-bound (re-derived on ColorScheme / palette sync):
+All groups are palette-bound (re-derived on ColorScheme / palette sync). Each
+row is coloured by its kind accent; the six per-kind groups (blended over the
+menu PANEL shade at the `menu.tint.*` factors) are, for e.g. Function:
 
-  LvimCmpMatch        matched query chars inside a label (red, bold)
-  LvimCmpDetail       the dim right detail column
-  LvimCmpGhost        the inline ghost-text remainder (dim italic)
-  LvimCmpKind{Name}   one chip group per CompletionItemKind (accent fg over a
-                      soft tint of the same accent), e.g. LvimCmpKindFunction
+  LvimCmpMatch             matched query chars inside a label (red, bold)
+  LvimCmpGhost             the inline ghost-text remainder (dim italic)
+  LvimCmpKindFunction      the icon chip at rest (accent fg over `tint.chip`)
+  LvimCmpKindFunctionSel   the chip on the selected row (`tint.chip_selected`)
+  LvimCmpKindFunctionRow   the whole-row background at rest (`tint.row`)
+  LvimCmpKindFunctionRowSel the row background under the cursor (`tint.row_selected`)
+  LvimCmpKindFunctionText  the label text (accent fg only)
+  LvimCmpKindFunctionDetail the right column / kind name (accent fg, bold)
 
 The menu chrome itself (LvimUiMenuNormal / Sel / Thumb / Track) belongs to the
 lvim-ui `menu` preset — see |lvim-ui.menu()|.
 
 ==============================================================================
-8. HEALTH                                                    *lvim-cmp-health*
+10. HEALTH                                                   *lvim-cmp-health*
 
 Run `:checkhealth lvim-cmp`. It reports the Neovim requirement, the shared
 dependencies (including WHICH lvim-fuzzy backend loaded), whether the trigger
-autocmds and keymaps are wired, the current buffer's completion-capable
-clients, and validates the live config.
+autocmds and keymaps are wired, every source's live status (the current
+buffer's completion-capable clients, the snippet collections discovered —
+including unparsable files, the buffer word-index statistics), and validates
+the live config.
 
 vim:tw=78:ts=8:ft=help:norl:

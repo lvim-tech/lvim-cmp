@@ -50,7 +50,7 @@ function M.apply(item, ctx)
     local cursor = api.nvim_win_get_cursor(0)
     local row = cursor[1] - 1
     local line = api.nvim_get_current_line()
-    local client = lsp.get_client_by_id(item.client_id)
+    local client = item.client_id and lsp.get_client_by_id(item.client_id) or nil
     local encoding = (client and client.offset_encoding) or "utf-16"
 
     -- start column: the textEdit's (insert-mode range of an InsertReplaceEdit), else the

@@ -32,6 +32,18 @@ local function cr_fallback()
     return "<CR>"
 end
 
+--- Jump within an active snippet session if the tabstop in `dir` exists (dir 1 forward /
+--- -1 back) — the first link of the <Tab> chain, above menu selection.
+---@param dir integer
+---@return boolean jumped
+local function snippet_jump(dir)
+    if vim.snippet.active({ direction = dir }) then
+        vim.snippet.jump(dir)
+        return true
+    end
+    return false
+end
+
 --- Map every lhs in `keys` to `fn` in insert mode.
 ---@param keys string[]
 ---@param fn fun(lhs: string)
@@ -80,6 +92,40 @@ function M.setup()
     map_all(keys.trigger, function()
         engine.trigger()
     end, "lvim-cmp: trigger completion")
+
+    map_all(keys.docs_toggle, function(lhs)
+        if not engine.docs_toggle() then
+            feed(lhs)
+        end
+    end, "lvim-cmp: toggle documentation")
+
+    -- <Tab> chain: an active snippet's next tabstop wins, then the menu selection, then
+    -- the raw key (so <Tab> still indents when neither is live). <S-Tab> mirrors it back.
+    map_all(keys.tab, function(lhs)
+        if snippet_jump(1) or engine.select(1) then
+            return
+        end
+        feed(lhs)
+    end, "lvim-cmp: tab (snippet jump / select next)")
+
+    map_all(keys.s_tab, function(lhs)
+        if snippet_jump(-1) or engine.select(-1) then
+            return
+        end
+        feed(lhs)
+    end, "lvim-cmp: shift-tab (snippet jump / select previous)")
+
+    map_all(keys.docs_scroll_down, function(lhs)
+        if not engine.docs_scroll(1) then
+            feed(lhs)
+        end
+    end, "lvim-cmp: scroll docs down")
+
+    map_all(keys.docs_scroll_up, function(lhs)
+        if not engine.docs_scroll(-1) then
+            feed(lhs)
+        end
+    end, "lvim-cmp: scroll docs up")
 end
 
 --- Remove the mappings (disable).
@@ -89,7 +135,18 @@ function M.teardown()
     end
     installed = false
     local keys = config.keys
-    for _, list in pairs({ keys.select_next, keys.select_prev, keys.accept, keys.abort, keys.trigger }) do
+    for _, list in pairs({
+        keys.select_next,
+        keys.select_prev,
+        keys.accept,
+        keys.abort,
+        keys.trigger,
+        keys.docs_toggle,
+        keys.tab,
+        keys.s_tab,
+        keys.docs_scroll_down,
+        keys.docs_scroll_up,
+    }) do
         for _, lhs in ipairs(list or {}) do
             pcall(vim.keymap.del, "i", lhs)
         end

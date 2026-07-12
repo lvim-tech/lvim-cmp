@@ -24,7 +24,9 @@ local generation = 0
 ---@field line string           the cursor line at snapshot time
 ---@field bounds { s: integer, e: integer }  keyword byte bounds: 0-based start, exclusive end (= cursor col)
 ---@field keyword string        the text inside the bounds (the query)
----@field trigger_char string?  set when this context was opened by a server trigger character
+---@field trigger_char string?  set when this context was opened by a source trigger character
+---@field manual boolean        opened by an explicit user trigger (<C-Space>) — bypasses per-source keyword floors
+---@field for_incomplete boolean  a re-request because the prior response was isIncomplete → LSP TriggerKind 3
 
 --- Keyword bounds ending at `col` (0-based, exclusive) in `line`, per the configured
 --- `keyword_pattern`. An empty keyword yields `s == e == col`.
@@ -41,9 +43,11 @@ function M.keyword_bounds(line, col)
 end
 
 --- Snapshot a fresh context at the current cursor (bumps the generation).
----@param trigger_char string?  the trigger character that opened it, if any
+---@param trigger_char string?    the trigger character that opened it, if any
+---@param manual boolean?         opened by an explicit user trigger (<C-Space>)
+---@param for_incomplete boolean? the re-request follows an isIncomplete response (TriggerKind 3)
 ---@return LvimCmpContext
-function M.new(trigger_char)
+function M.new(trigger_char, manual, for_incomplete)
     generation = generation + 1
     local win = api.nvim_get_current_win()
     local cursor = api.nvim_win_get_cursor(win)
@@ -58,6 +62,8 @@ function M.new(trigger_char)
         bounds = { s = s, e = e },
         keyword = line:sub(s + 1, e),
         trigger_char = trigger_char,
+        manual = manual == true,
+        for_incomplete = for_incomplete == true,
     }
 end
 

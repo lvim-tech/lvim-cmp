@@ -16,15 +16,6 @@ local M = {}
 
 M.name = "lsp"
 
----@class LvimCmpItem                 one completion candidate (LSP-shaped + bookkeeping)
----@field raw table                   the raw LSP CompletionItem (resolve target)
----@field client_id integer           the client that produced it
----@field source_name string
----@field label string
----@field filter_text string          filterText or label — what fuzzy matching runs on
----@field sort_text string            sortText or label — the empty-query / tiebreak order
----@field kind integer?               CompletionItemKind
-
 --- Clients attached to `bufnr` that provide completion.
 ---@param bufnr integer
 ---@return vim.lsp.Client[]
@@ -103,7 +94,12 @@ function M.get(ctx, cb)
     local items = {} ---@type LvimCmpItem[]
     local incomplete = false
     local pending = #clients
-    local finished = false
+    ---@type boolean the FINAL response (every client answered) has been emitted — no more work
+    local settled = false
+    ---@type boolean the request was cancelled (a newer context superseded it) — suppress emits
+    local cancelled = false
+    ---@type boolean at least one (possibly partial) emit has gone out — a later arrival is a LIVE update
+    local emitted = false
     ---@type { client: vim.lsp.Client, id: integer }[]
     local inflight = {}
     ---@type uv.uv_timer_t?
@@ -117,33 +113,59 @@ function M.get(ctx, cb)
         timer = nil
     end
 
-    --- Emit once (schedule'd off the keystroke), cancelling anything still in flight.
-    local function emit()
-        if finished then
-            return
-        end
-        finished = true
-        stop_timer()
+    local function cancel_inflight()
         for _, req in ipairs(inflight) do
             req.client:cancel_request(req.id)
         end
+    end
+
+    --- Deliver the CURRENT accumulation (schedule'd off the keystroke). Fires on each
+    --- meaningful change: the timeout's partial set, every straggler that lands after it
+    --- (a live menu update instead of a dropped result), and the final all-answered set.
+    local function emit()
+        emitted = true
         vim.schedule(function()
-            cb(items, incomplete)
+            if not cancelled then
+                cb(items, incomplete)
+            end
         end)
+    end
+
+    local function cancel_fn()
+        if cancelled then
+            return
+        end
+        cancelled = true
+        stop_timer()
+        cancel_inflight()
     end
 
     for _, client in ipairs(clients) do
         local params = lsp.util.make_position_params(ctx.win, client.offset_encoding)
+        -- Trigger kind: an isIncomplete re-request is kind 3 (TriggerForIncompleteCompletions);
+        -- otherwise kind 2 with the character, but ONLY when THIS client declared it (a
+        -- context opened by another source's trigger — path's "/" — is a plain Invoked
+        -- request for a server that never asked for the char); else kind 1 (Invoked).
+        local trigger_kind, trigger_character = 1, nil
+        if ctx.for_incomplete then
+            trigger_kind = 3
+        elseif ctx.trigger_char then
+            local provider = client.server_capabilities.completionProvider
+            for _, ch in ipairs((type(provider) == "table" and provider.triggerCharacters) or {}) do
+                if ch == ctx.trigger_char then
+                    trigger_kind, trigger_character = 2, ctx.trigger_char
+                    break
+                end
+            end
+        end
         ---@diagnostic disable-next-line: inject-field  -- CompletionParams = PositionParams + context
-        params.context = {
-            triggerKind = ctx.trigger_char and 2 or 1,
-            triggerCharacter = ctx.trigger_char,
-        }
+        params.context = { triggerKind = trigger_kind, triggerCharacter = trigger_character }
         local ok, request_id = client:request("textDocument/completion", params, function(err, result)
-            if finished then
+            if settled or cancelled then
                 return
             end
             pending = pending - 1
+            local before = #items
             if not err and result then
                 -- CompletionList { isIncomplete, itemDefaults, items } or CompletionItem[]
                 local list = result.items and result or { items = result, isIncomplete = false }
@@ -168,6 +190,13 @@ function M.get(ctx, cb)
                 end
             end
             if pending == 0 then
+                -- everyone answered → the final, complete set
+                settled = true
+                stop_timer()
+                emit()
+            elseif emitted and #items > before then
+                -- a straggler that missed the timeout but beat the cancel: fold its items in
+                -- as a LIVE menu update instead of dropping them
                 emit()
             end
         end, ctx.bufnr)
@@ -177,39 +206,46 @@ function M.get(ctx, cb)
             pending = pending - 1
         end
     end
+
     if pending == 0 then
-        emit()
-        return nil
+        if not settled then
+            settled = true
+            emit()
+        end
+        return cancel_fn
     end
 
     if timer then
-        timer:start(config.sources.lsp.timeout_ms, 0, function()
-            vim.schedule(emit)
-        end)
+        timer:start(
+            config.sources.lsp.timeout_ms,
+            0,
+            vim.schedule_wrap(function()
+                stop_timer()
+                if settled or cancelled then
+                    return
+                end
+                -- timeout: emit what has arrived and KEEP the slow clients in flight, so a
+                -- later answer becomes a live update (see the request callback), not a drop
+                emit()
+            end)
+        )
     end
 
-    return function()
-        if finished then
-            return
-        end
-        finished = true
-        stop_timer()
-        for _, req in ipairs(inflight) do
-            req.client:cancel_request(req.id)
-        end
-    end
+    return cancel_fn
 end
 
 --- Resolve an item (documentation / detail / additionalTextEdits / command) via
 --- completionItem/resolve when the server offers it; otherwise pass it through.
 --- `cb(item)` always fires (schedule'd), with the resolved fields merged into `raw`.
+--- Cached per item (`item.resolved`), so the docs float's resolve doubles as the
+--- accept-time one.
 ---@param item LvimCmpItem
 ---@param cb fun(item: LvimCmpItem)
 function M.resolve(item, cb)
-    local client = lsp.get_client_by_id(item.client_id)
+    local client = item.client_id and lsp.get_client_by_id(item.client_id) or nil
     local provider = client and client.server_capabilities.completionProvider
     local can = type(provider) == "table" and provider.resolveProvider
-    if not (client and can) then
+    if item.resolved or not (client and can) then
         vim.schedule(function()
             cb(item)
         end)
@@ -218,6 +254,7 @@ function M.resolve(item, cb)
     local ok = client:request("completionItem/resolve", item.raw, function(err, result)
         if not err and type(result) == "table" then
             item.raw = result
+            item.resolved = true
         end
         vim.schedule(function()
             cb(item)

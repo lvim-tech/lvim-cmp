@@ -1,12 +1,15 @@
--- lvim-cmp.engine: the orchestration core — contexts → source fan-out → fuzzy rank →
--- menu/ghost. The correctness backbone is the context GENERATION: every source response
--- carries the id it was requested under and is dropped unless it still matches; no stale
--- menu ever renders. The performance backbone is the two-path split:
+-- lvim-cmp.engine: the orchestration core — contexts → multi-source fan-out → fuzzy
+-- rank → menu/ghost/docs. The correctness backbone is the context GENERATION: every
+-- source response carries the id it was requested under and is dropped unless it still
+-- matches; no stale menu ever renders. The performance backbone is the two-path split:
 --   • a keystroke INSIDE the current keyword bounds only RE-RANKS the cached candidate
---     set (one lvim-fuzzy call — no source round-trip), unless the response was
+--     set (one lvim-fuzzy call — no source round-trip), unless a response was
 --     isIncomplete (then it refetches, per the protocol);
 --   • leaving the bounds / a trigger character cancels in-flight requests and opens a
 --     fresh context (fan-out again).
+-- Sources respond independently: each arrival re-merges the per-source buckets (in
+-- source-priority order, each bucket pre-sorted by its own sortText — so the fuzzy
+-- index tiebreak encodes priority then server order) and re-prepares the matcher set.
 -- There is no input debounce by default (`debounce_ms = 0`): the matcher IS the budget;
 -- source responses are emitted vim.schedule'd off the keystroke by the sources.
 --
@@ -18,6 +21,7 @@ local sources = require("lvim-cmp.sources")
 local fuzzy = require("lvim-cmp.fuzzy")
 local menu = require("lvim-cmp.menu")
 local ghost = require("lvim-cmp.ghost")
+local docs = require("lvim-cmp.docs")
 local accept = require("lvim-cmp.accept")
 
 local api = vim.api
@@ -26,7 +30,8 @@ local M = {}
 
 ---@class LvimCmpActive           the live completion session (one at a time)
 ---@field ctx LvimCmpContext      the context the sources were queried under
----@field items LvimCmpItem[]     merged response items, sorted by sort_text
+---@field responses table<string, { items: LvimCmpItem[], incomplete: boolean }>  per-source buckets (items pre-sorted by sort_text)
+---@field items LvimCmpItem[]     the merged candidate list (buckets in source-priority order)
 ---@field set LvimCmpFuzzySet?    the prepared lvim-fuzzy candidate set (nil until a response lands)
 ---@field incomplete boolean      any response was isIncomplete → refetch per keystroke
 ---@field ranked LvimCmpItem[]    the current ranked view (what the menu shows)
@@ -51,12 +56,13 @@ local function enabled(bufnr)
     return e == true
 end
 
---- Tear the session down: cancel in-flight requests, hide the menu + ghost.
+--- Tear the session down: cancel in-flight requests, hide the menu + ghost + docs.
 function M.hide()
     if active and active.cancel then
         active.cancel()
     end
     active = nil
+    docs.reset() -- before menu.hide(): the primitive closes the docs slot with the menu
     menu.hide()
     ghost.clear()
 end
@@ -91,6 +97,36 @@ local function update_ghost(query)
     end
 end
 
+--- Hand the current selection to the docs float (debounced there).
+local function update_docs()
+    if not active then
+        return
+    end
+    docs.on_select(menu.visible() and selected_item() or nil, active.ctx.bufnr)
+end
+
+--- Per-candidate score offsets for the fuzzy rank (folded in natively before the top-K
+--- cap): a candidate whose filter text is a case-insensitive PREFIX of the query gets
+--- `config.fuzzy.prefix_boost`, so a literal-prefix completion outranks a scattered fuzzy
+--- hit. Returns nil (no boosts) for an empty query or when the boost is disabled.
+---@param items LvimCmpItem[]
+---@param query string
+---@return integer[]?
+local function compute_boosts(items, query)
+    local pb = config.fuzzy.prefix_boost or 0
+    if query == "" or pb <= 0 then
+        return nil
+    end
+    local q = query:lower()
+    local nq = #q
+    local boosts = {}
+    for i, it in ipairs(items) do
+        local ft = it.filter_text
+        boosts[i] = (ft ~= "" and ft:sub(1, nq):lower() == q) and pb or 0
+    end
+    return boosts
+end
+
 --- Rank the cached candidate set against the LIVE query and render. The fast path —
 --- one lvim-fuzzy call, no source round-trip. Hides (keeping the session) when nothing
 --- matches; tears down when the cursor left the context.
@@ -113,7 +149,7 @@ local function rerank()
     active.query = query
     active.last = { row = cursor[1], col = cursor[2], tick = vim.b[ctx.bufnr].changedtick }
 
-    local results = fuzzy.match(active.set, query)
+    local results = fuzzy.match(active.set, query, compute_boosts(active.items, query))
     local ranked = {}
     for k, r in ipairs(results) do
         ranked[k] = active.items[r.index]
@@ -121,12 +157,14 @@ local function rerank()
     active.ranked = ranked
     if #ranked == 0 then
         -- nothing matches RIGHT NOW; keep the session — a corrected keystroke re-matches
+        docs.reset()
         menu.hide()
         ghost.clear()
         return
     end
     menu.show(ranked, query, ctx, config.menu.selection.preselect and 1 or nil)
     update_ghost(query)
+    update_docs()
 end
 
 --- Run `rerank` now, or defer it by `debounce_ms` (a newer keystroke supersedes).
@@ -145,16 +183,11 @@ local function schedule_rank()
     end, ms)
 end
 
---- A source response for context `ctx_id` landed (already vim.schedule'd by the source).
----@param ctx_id integer
+--- Sort a response's items by sort_text (stable via original index), so the fuzzy
+--- index tiebreak follows the server's intended empty-query order within its bucket.
 ---@param items LvimCmpItem[]
----@param incomplete boolean
-local function on_response(ctx_id, items, incomplete)
-    if not active or active.ctx.id ~= ctx_id then
-        return -- stale: a newer context superseded this request
-    end
-    -- Present empty-query views in the server's intended order: sort ONCE per response
-    -- by sortText (stable via original index), so the fuzzy index tiebreak follows it.
+---@return LvimCmpItem[]
+local function sort_bucket(items)
     local order = {}
     for i, it in ipairs(items) do
         order[i] = { it = it, i = i }
@@ -165,27 +198,55 @@ local function on_response(ctx_id, items, incomplete)
         end
         return a.i < b.i
     end)
-    local sorted, texts = {}, {}
+    local sorted = {}
     for k, e in ipairs(order) do
         sorted[k] = e.it
-        texts[k] = e.it.filter_text
     end
-    active.items = sorted
-    active.incomplete = incomplete
-    -- the haystack crosses into the matcher ONCE per response; keystrokes only re-rank
+    return sorted
+end
+
+--- A source response for context `ctx_id` landed (already vim.schedule'd by the source).
+--- Each arrival re-merges the buckets — sources in priority order, each pre-sorted —
+--- and re-prepares the matcher set (the haystack crosses the boundary once per
+--- RESPONSE, never per keystroke).
+---@param ctx_id integer
+---@param source_name string
+---@param items LvimCmpItem[]
+---@param incomplete boolean
+local function on_response(ctx_id, source_name, items, incomplete)
+    if not active or active.ctx.id ~= ctx_id then
+        return -- stale: a newer context superseded this request
+    end
+    active.responses[source_name] = { items = sort_bucket(items), incomplete = incomplete }
+    local merged, texts, any_incomplete = {}, {}, false
+    for _, src in ipairs(sources.list()) do
+        local bucket = active.responses[src.name]
+        if bucket then
+            any_incomplete = any_incomplete or bucket.incomplete
+            for _, it in ipairs(bucket.items) do
+                merged[#merged + 1] = it
+                texts[#texts + 1] = it.filter_text
+            end
+        end
+    end
+    active.items = merged
+    active.incomplete = any_incomplete
     active.set = fuzzy.prepare(texts)
     rerank()
 end
 
 --- Open a fresh context (cancels the previous session's requests) and fan out.
 ---@param trigger_char string?
-local function start_context(trigger_char)
+---@param manual boolean?
+---@param for_incomplete boolean?  the re-request is because the prior response was isIncomplete (TriggerKind 3)
+local function start_context(trigger_char, manual, for_incomplete)
     if active and active.cancel then
         active.cancel()
     end
-    local ctx = context.new(trigger_char)
+    local ctx = context.new(trigger_char, manual, for_incomplete)
     active = {
         ctx = ctx,
+        responses = {},
         items = {},
         set = nil,
         incomplete = false,
@@ -194,8 +255,8 @@ local function start_context(trigger_char)
         cancel = nil,
         last = { row = ctx.cursor[1], col = ctx.cursor[2], tick = vim.b[ctx.bufnr].changedtick },
     }
-    active.cancel = sources.fanout(ctx, function(_, items, incomplete)
-        on_response(ctx.id, items, incomplete)
+    active.cancel = sources.fanout(ctx, function(source_name, items, incomplete)
+        on_response(ctx.id, source_name, items, incomplete)
     end)
 end
 
@@ -223,7 +284,9 @@ function M.on_text_changed(char)
         -- EMPTY (reuse exists to avoid refetching a non-empty list; an empty one has
         -- nothing to re-rank — e.g. the server answered before its workspace loaded).
         if char and (active.incomplete or (active.set and #active.items == 0)) then
-            start_context(active.ctx.trigger_char)
+            -- an isIncomplete refetch re-triggers as TriggerKind 3; an empty-cache refetch is
+            -- a plain Invoked (kind 1), so only pass the flag when it was actually incomplete
+            start_context(active.ctx.trigger_char, active.ctx.manual, active.incomplete)
         else
             schedule_rank()
         end
@@ -278,16 +341,17 @@ function M.on_insert_leave()
     M.hide()
 end
 
---- Manual trigger (<C-Space>): open a context at the cursor regardless of keyword length.
+--- Manual trigger (<C-Space>): open a context at the cursor regardless of keyword
+--- length — the `manual` flag bypasses every per-source keyword floor.
 function M.trigger()
     local bufnr = api.nvim_get_current_buf()
     if not enabled(bufnr) then
         return
     end
-    start_context(nil)
+    start_context(nil, true)
 end
 
---- Move the menu selection and refresh the ghost.
+--- Move the menu selection and refresh the ghost + docs.
 ---@param delta integer
 ---@return boolean handled  false when no menu is visible (caller falls back)
 function M.select(delta)
@@ -296,7 +360,31 @@ function M.select(delta)
     end
     menu.select_move(delta)
     update_ghost(active and active.query or "")
+    update_docs()
     return true
+end
+
+--- Toggle the docs float for the current selection (mutes/unmutes auto-docs).
+---@return boolean handled  false when no menu is visible (caller falls back)
+function M.docs_toggle()
+    if not menu.visible() or not active then
+        return false
+    end
+    docs.toggle(selected_item(), active.ctx.bufnr)
+    return true
+end
+
+--- Scroll the open docs float by half its height (<C-f>/<C-b>). Handled only when the
+--- menu is up AND a docs float is actually shown — otherwise the caller falls back so
+--- the raw key keeps its native meaning.
+---@param dir integer  1 = down, -1 = up
+---@return boolean handled
+function M.docs_scroll(dir)
+    if not menu.visible() then
+        return false
+    end
+    local step = math.max(1, math.floor((config.docs.max_height or 20) / 2))
+    return docs.scroll(dir * step)
 end
 
 --- Accept the selected item: resolve it (docs/additionalTextEdits/command may arrive

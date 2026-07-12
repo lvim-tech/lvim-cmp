@@ -26,12 +26,15 @@ end
 --- Rank the prepared set against `query` (once per keystroke). Returns ranked
 --- `{ index, score }` pairs (1-based indices into the prepared candidate array),
 --- capped at `config.fuzzy.max_results`. An empty query returns the source order.
+--- `boosts` (optional, parallel to the candidate set) folds per-item score offsets
+--- (exact-prefix / proximity) into the ranking before the cap — see engine.rerank.
 ---@param set LvimCmpFuzzySet
 ---@param query string
+---@param boosts integer[]?
 ---@return { index: integer, score: integer }[] results
 ---@return integer count
-function M.match(set, query)
-    local results, count = lvim_fuzzy.match(query, set.ctx)
+function M.match(set, query, boosts)
+    local results, count = lvim_fuzzy.match(query, set.ctx, boosts)
     local cap = config.fuzzy.max_results
     if cap and cap > 0 and count > cap then
         local out = {}
