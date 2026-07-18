@@ -38,6 +38,7 @@ local M = {}
 ---@field query string            the query the view was ranked under
 ---@field cancel fun()?           aborts in-flight source requests
 ---@field last { row: integer, col: integer, tick: integer }?  last processed cursor state (dedup)
+---@field merge_scheduled boolean a coalesced merge is already queued for this tick (dedup the merge)
 
 ---@type LvimCmpActive?
 local active = nil
@@ -205,19 +206,15 @@ local function sort_bucket(items)
     return sorted
 end
 
---- A source response for context `ctx_id` landed (already vim.schedule'd by the source).
---- Each arrival re-merges the buckets — sources in priority order, each pre-sorted —
---- and re-prepares the matcher set (the haystack crosses the boundary once per
---- RESPONSE, never per keystroke).
+--- Merge the arrived buckets — sources in priority order, each pre-sorted — re-prepare the matcher
+--- set (the haystack crosses the Lua↔native boundary ONCE per merge, never per keystroke) and rerank.
+--- Coalesced by `on_response`: one merge per event-loop tick, not one per response.
 ---@param ctx_id integer
----@param source_name string
----@param items LvimCmpItem[]
----@param incomplete boolean
-local function on_response(ctx_id, source_name, items, incomplete)
+local function merge_responses(ctx_id)
     if not active or active.ctx.id ~= ctx_id then
         return -- stale: a newer context superseded this request
     end
-    active.responses[source_name] = { items = sort_bucket(items), incomplete = incomplete }
+    active.merge_scheduled = false
     local merged, texts, any_incomplete = {}, {}, false
     for _, src in ipairs(sources.list()) do
         local bucket = active.responses[src.name]
@@ -233,6 +230,28 @@ local function on_response(ctx_id, source_name, items, incomplete)
     active.incomplete = any_incomplete
     active.set = fuzzy.prepare(texts)
     rerank()
+end
+
+--- A source response for context `ctx_id` landed (already vim.schedule'd by the source). Store the
+--- bucket and coalesce the merge: every source emits via vim.schedule, so a burst of responses lands
+--- in ONE event-loop tick — the first schedules a single `merge_responses`, the rest (guarded by
+--- `merge_scheduled`) just drop their bucket in. Result is one merge + prepare + rerank per burst
+--- instead of one per source. A later async straggler (an LSP reply) is its own tick → its own merge.
+---@param ctx_id integer
+---@param source_name string
+---@param items LvimCmpItem[]
+---@param incomplete boolean
+local function on_response(ctx_id, source_name, items, incomplete)
+    if not active or active.ctx.id ~= ctx_id then
+        return -- stale: a newer context superseded this request
+    end
+    active.responses[source_name] = { items = sort_bucket(items), incomplete = incomplete }
+    if not active.merge_scheduled then
+        active.merge_scheduled = true
+        vim.schedule(function()
+            merge_responses(ctx_id)
+        end)
+    end
 end
 
 --- Open a fresh context (cancels the previous session's requests) and fan out.
@@ -254,6 +273,7 @@ local function start_context(trigger_char, manual, for_incomplete)
         query = ctx.keyword,
         cancel = nil,
         last = { row = ctx.cursor[1], col = ctx.cursor[2], tick = vim.b[ctx.bufnr].changedtick },
+        merge_scheduled = false,
     }
     active.cancel = sources.fanout(ctx, function(source_name, items, incomplete)
         on_response(ctx.id, source_name, items, incomplete)

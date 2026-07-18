@@ -4,6 +4,12 @@
 -- handshake: confirm first, else `require("lvim-pairs").cr()` (the split-an-empty-pair
 -- newline), else a plain <CR> — one compose order, no double mapping.
 --
+-- Termcode contract: every fallback string here is VIM NOTATION (e.g. "<CR>", "<C-n>"),
+-- never pre-replaced termcodes. `feed()` is the SINGLE translation point — it runs
+-- `vim.keycode` exactly once. `lvim-pairs.cr()` upholds the same contract (it returns
+-- "<CR>" / "<CR><Esc>O" notation, and lvim-pairs' own expr map replaces those keycodes),
+-- so composing it through `feed()` translates once and cannot double-translate.
+--
 ---@module "lvim-cmp.keymaps"
 
 local config = require("lvim-cmp.config")
