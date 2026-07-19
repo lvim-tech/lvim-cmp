@@ -208,6 +208,9 @@ function M.get(ctx, cb)
     end
 
     if pending == 0 then
+        -- every request failed to send (client stopping mid-keystroke): the request is already settled, so
+        -- release the created-but-never-started timer here instead of leaking it until a later cancel runs.
+        stop_timer()
         if not settled then
             settled = true
             emit()
@@ -253,7 +256,10 @@ function M.resolve(item, cb)
     end
     local ok = client:request("completionItem/resolve", item.raw, function(err, result)
         if not err and type(result) == "table" then
-            item.raw = result
+            -- The spec says a resolve response is the COMPLETE item, but real servers ship partial results
+            -- (omitting textEdit/sortText they sent originally). Fold instead of replace so a partial resolve
+            -- cannot drop the original's fields (which `item.resolved` would then cache for the session).
+            item.raw = vim.tbl_extend("force", item.raw, result)
             item.resolved = true
         end
         vim.schedule(function()

@@ -37,6 +37,13 @@ local M = {}
 function M.setup(opts)
     if opts then
         merge(config, opts)
+        -- The menu handle caches its geometry (max_height/width, chip offset, docs.max_*) at first creation
+        -- and setup() never rebuilds it — so a re-tune of `menu`/`docs` (e.g. via control-center) would
+        -- silently no-op against the live config. Close the (lazily-created) handle so the next show rebuilds
+        -- it from the fresh values.
+        if opts.menu ~= nil or opts.docs ~= nil then
+            require("lvim-cmp.menu").close()
+        end
     end
     highlights.setup()
     if config.enabled ~= false then

@@ -418,8 +418,13 @@ function M.accept()
     local ctx = active.ctx
     -- close the UI before mutating the buffer (the mutation retriggers TextChangedI)
     M.hide()
+    -- Snapshot the buffer's changedtick: `sources.resolve` is an async LSP round-trip with no timeout, and
+    -- `accept.apply` replaces from the edit start to the CURRENT cursor. That "typed tail is part of the query"
+    -- rationale only holds for text typed BEFORE this keypress — so if anything is typed/deleted while the
+    -- resolve is in flight (tick changes), bail rather than swallow it. Unchanged tick = the common case.
+    local tick = vim.b[ctx.bufnr].changedtick
     sources.resolve(item, function(resolved)
-        if api.nvim_get_current_buf() ~= ctx.bufnr then
+        if api.nvim_get_current_buf() ~= ctx.bufnr or vim.b[ctx.bufnr].changedtick ~= tick then
             return
         end
         accept.apply(resolved, ctx)
