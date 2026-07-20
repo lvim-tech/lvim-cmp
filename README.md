@@ -118,7 +118,11 @@ Public API: `setup(opts)`, `enable()` / `disable()`, `show()`, `hide()`, `accept
 
 ```lua
 require("lvim-cmp").setup({
-    enabled = true, -- master switch; also fun(bufnr): boolean
+    -- Master switch; also fun(bufnr): boolean. Scratch buffers (non-empty 'buftype')
+    -- never complete regardless — UI panels, prompts, previews — unless the plugin
+    -- that owns one opts it in with `vim.b.lvim_cmp_enable = true` (an editable
+    -- scratch that is a genuine editor, e.g. lvim-db's query editor).
+    enabled = true,
     debounce_ms = 0, -- keystroke → rank delay; 0 = per keystroke (the matcher is the budget)
     keyword_pattern = "[%a_][%w_%-]*", -- context bounds (Lua pattern)
     trigger = {

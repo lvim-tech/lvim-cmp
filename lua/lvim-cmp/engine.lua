@@ -285,7 +285,10 @@ end
 ---@param char string?
 function M.on_text_changed(char)
     local bufnr = api.nvim_get_current_buf()
-    if not enabled(bufnr) or vim.bo[bufnr].buftype ~= "" then
+    -- Scratch buffers (non-empty buftype) never complete — UI panels, prompts, previews — UNLESS
+    -- the plugin that owns one opts it in with `b:lvim_cmp_enable = true`: an editable scratch
+    -- that is a genuine editor (e.g. lvim-db's query editor) completes like a real file buffer.
+    if not enabled(bufnr) or (vim.bo[bufnr].buftype ~= "" and not vim.b[bufnr].lvim_cmp_enable) then
         M.hide()
         return
     end

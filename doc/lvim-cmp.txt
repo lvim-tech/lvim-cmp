@@ -57,6 +57,12 @@ FULL default config; the option set is documented as `LvimCmpConfig` in
 `lua/lvim-cmp/config.lua` (enabled, debounce_ms, keyword_pattern, trigger,
 fuzzy, sources.{lsp,path,buffer}, menu, docs, ghost_text, keys).
 
+Scratch buffers (a non-empty 'buftype') never complete regardless of `enabled`
+— UI panels, prompts, previews — UNLESS the plugin that owns one opts it in
+with the buffer-local `vim.b.lvim_cmp_enable = true`: an editable scratch that
+is a genuine editor (e.g. lvim-db's query editor) then completes like a real
+file buffer.
+
 Start language servers with the lvim-cmp capabilities fragment: >lua
     local capabilities = vim.tbl_deep_extend(
         "force",
