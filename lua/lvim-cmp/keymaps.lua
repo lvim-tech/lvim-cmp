@@ -43,6 +43,18 @@ end
 ---@param dir integer
 ---@return boolean jumped
 local function snippet_jump(dir)
+    -- lvim-snippets owns a fuller snippet engine than `vim.snippet` (nested placeholders, mirrors,
+    -- choices, transforms), so when it is installed its session is the one to drive; a session it
+    -- started is invisible to `vim.snippet.active`. Falls back to the native one otherwise, which
+    -- keeps lvim-cmp usable on its own.
+    local ok, snip = pcall(require, "lvim-snippets")
+    if ok and type(snip.jumpable) == "function" then
+        if snip.jumpable(dir) then
+            snip.jump(dir)
+            return true
+        end
+        -- A native session can still exist (an LSP item expanded before lvim-snippets loaded).
+    end
     if vim.snippet.active({ direction = dir }) then
         vim.snippet.jump(dir)
         return true

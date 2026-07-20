@@ -71,14 +71,20 @@ function M.apply(item, ctx)
     local text, is_snippet = insert_text(item.raw)
     if is_snippet then
         -- clear the typed range, land the cursor at its start, then expand. `item.expand` is a
-        -- custom expander (LuaSnip snippet items set it — vim.snippet can't drive their
-        -- function/dynamic nodes); everything else expands through native vim.snippet.
+        -- custom expander (a LuaSnip collection sets it — only LuaSnip can drive nodes it built);
+        -- everything else goes through lvim-snippets' session engine, which implements the whole LSP
+        -- grammar, and falls back to `vim.snippet` when that plugin is not installed.
         api.nvim_buf_set_text(bufnr, row, scol, row, ecol, { "" })
         api.nvim_win_set_cursor(0, { row + 1, scol })
         if type(item.expand) == "function" then
             item.expand()
         else
-            vim.snippet.expand(text)
+            local ok, session = pcall(require, "lvim-snippets.session")
+            if ok and type(session.expand) == "function" then
+                session.expand(text)
+            else
+                vim.snippet.expand(text)
+            end
         end
     else
         local lines = vim.split(text, "\n", { plain = true })
