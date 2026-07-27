@@ -5,10 +5,12 @@
 -- lvim-cmp-specific ones: the per-kind roles (chip / chip-selected / row background /
 -- label text) and the match/detail/ghost text roles.
 --
+-- The kind ACCENTS come from the live config (`config.kinds.accents`), so the group set is
+-- rebuilt — not just recoloured — whenever setup() re-runs with new kinds or tints.
+--
 ---@module "lvim-cmp.highlights"
 
 local hl = require("lvim-utils.highlight")
-local kinds = require("lvim-cmp.kinds")
 local config = require("lvim-cmp.config")
 
 local M = {}
@@ -16,49 +18,57 @@ local M = {}
 ---@type boolean the factory is bound (setup may be called more than once)
 local bound = false
 
---- Bind the palette factory. Idempotent.
+--- Build every lvim-cmp group from the live palette AND the live config.
+---@param c table?  the live palette (defaults to lvim-utils.colors)
+---@return table<string, table>
+local function build(c)
+    c = c or require("lvim-utils.colors")
+    -- Concrete shade of the menu PANEL the chips sit on (the lvim-ui menu chrome rule:
+    -- the theme's float shade, else bg_dark — never "NONE", a blend needs a hex). The
+    -- tint canon: a coloured cell blends its accent toward the surface it SITS ON — a
+    -- chip tinted over the EDITOR bg reads as a foreign dark patch on the float.
+    local panel = c.bg_float or c.bg_dark
+    local groups = {
+        -- matched query chars inside a label (painted on visible rows only)
+        LvimCmpMatch = { fg = c.red, bold = true },
+        -- inline ghost-text preview of the selected item's remainder
+        LvimCmpGhost = { fg = c.comment, italic = true },
+    }
+    -- Six groups per CompletionItemKind, all derived from the ONE kind accent, so every row
+    -- reads as a self-coloured legend that tracks the live palette (the tint canon: every
+    -- coloured cell is the accent tinted toward the PANEL it sits on). The four tint strengths
+    -- are live-configurable via `menu.tint`:
+    --   • <Name>       — the icon chip at REST: accent fg over `tint.chip`.
+    --   • <Name>Sel    — the chip on the SELECTED row: accent fg over `tint.chip_selected`.
+    --   • <Name>Row    — the WHOLE-row background at REST: `tint.row` (via the menu row `hl`).
+    --   • <Name>RowSel — the WHOLE-row background while selected: `tint.row_selected` (the row
+    --                    `sel_hl`, used instead of the blue bar — the cursor line is a stronger
+    --                    tint of the row's OWN colour).
+    --   • <Name>Text   — the label text: the accent as fg only, so the row tint shows through.
+    --   • <Name>Detail — the right column (the kind name): the accent fg, BOLD.
+    local t = config.menu.tint
+    for name, accent in pairs(config.kinds.accents) do
+        local color = c[accent] or c.fg
+        groups["LvimCmpKind" .. name] = { fg = color, bg = hl.blend(color, panel, t.chip) }
+        groups["LvimCmpKind" .. name .. "Sel"] = { fg = color, bg = hl.blend(color, panel, t.chip_selected) }
+        groups["LvimCmpKind" .. name .. "Row"] = { bg = hl.blend(color, panel, t.row) }
+        groups["LvimCmpKind" .. name .. "RowSel"] = { bg = hl.blend(color, panel, t.row_selected) }
+        groups["LvimCmpKind" .. name .. "Text"] = { fg = color }
+        groups["LvimCmpKind" .. name .. "Detail"] = { fg = color, bold = true }
+    end
+    return groups
+end
+
+--- Bind the palette factory. Idempotent — a REPEAT call (a second setup(), a control-center
+--- retune of `kinds`/`menu.tint`) re-derives the groups from the now-current config instead of
+--- silently no-opping, since the bound factory itself only re-runs on a palette change.
 function M.setup()
     if bound then
+        hl.register(build(), true)
         return
     end
     bound = true
-    hl.bind(function(c)
-        c = c or require("lvim-utils.colors")
-        -- Concrete shade of the menu PANEL the chips sit on (the lvim-ui menu chrome rule:
-        -- the theme's float shade, else bg_dark — never "NONE", a blend needs a hex). The
-        -- tint canon: a coloured cell blends its accent toward the surface it SITS ON — a
-        -- chip tinted over the EDITOR bg reads as a foreign dark patch on the float.
-        local panel = c.bg_float or c.bg_dark
-        local groups = {
-            -- matched query chars inside a label (painted on visible rows only)
-            LvimCmpMatch = { fg = c.red, bold = true },
-            -- inline ghost-text preview of the selected item's remainder
-            LvimCmpGhost = { fg = c.comment, italic = true },
-        }
-        -- Six groups per CompletionItemKind, all derived from the ONE kind accent, so every row
-        -- reads as a self-coloured legend that tracks the live palette (the tint canon: every
-        -- coloured cell is the accent tinted toward the PANEL it sits on). The four tint strengths
-        -- are live-configurable via `menu.tint`:
-        --   • <Name>       — the icon chip at REST: accent fg over `tint.chip`.
-        --   • <Name>Sel    — the chip on the SELECTED row: accent fg over `tint.chip_selected`.
-        --   • <Name>Row    — the WHOLE-row background at REST: `tint.row` (via the menu row `hl`).
-        --   • <Name>RowSel — the WHOLE-row background while selected: `tint.row_selected` (the row
-        --                    `sel_hl`, used instead of the blue bar — the cursor line is a stronger
-        --                    tint of the row's OWN colour).
-        --   • <Name>Text   — the label text: the accent as fg only, so the row tint shows through.
-        --   • <Name>Detail — the right column (the kind name): the accent fg, BOLD.
-        local t = config.menu.tint
-        for name, accent in pairs(kinds.accents) do
-            local color = c[accent] or c.fg
-            groups["LvimCmpKind" .. name] = { fg = color, bg = hl.blend(color, panel, t.chip) }
-            groups["LvimCmpKind" .. name .. "Sel"] = { fg = color, bg = hl.blend(color, panel, t.chip_selected) }
-            groups["LvimCmpKind" .. name .. "Row"] = { bg = hl.blend(color, panel, t.row) }
-            groups["LvimCmpKind" .. name .. "RowSel"] = { bg = hl.blend(color, panel, t.row_selected) }
-            groups["LvimCmpKind" .. name .. "Text"] = { fg = color }
-            groups["LvimCmpKind" .. name .. "Detail"] = { fg = color, bold = true }
-        end
-        return groups
-    end)
+    hl.bind(build)
 end
 
 return M

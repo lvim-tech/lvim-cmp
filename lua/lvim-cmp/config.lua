@@ -79,6 +79,15 @@
 ---@class LvimCmpGhostConfig
 ---@field enabled boolean                inline preview of the selected item's remainder
 
+---@class LvimCmpKindsConfig              the CompletionItemKind legend — the ONE place a kind's look is set
+---@field icons table<string, string>     kind name → Nerd glyph (single width); an item may still override
+---                                       its own glyph (path devicons)
+---@field accents table<string, string>   kind name → live-palette colour NAME (`lvim-utils.colors` key, e.g.
+---                                       "blue"/"purple"/"fg"). highlights.lua derives the six
+---                                       `LvimCmpKind<Name>*` groups (chip / chip-selected / row / row-selected
+---                                       / label text / detail) from this ONE accent, so changing a kind's
+---                                       colour here recolours its whole row.
+
 ---@class LvimCmpKeysConfig               each entry is a LIST of insert-mode lhs strings
 ---@field select_next string[]
 ---@field select_prev string[]
@@ -109,6 +118,7 @@
 ---@field menu LvimCmpMenuConfig
 ---@field docs LvimCmpDocsConfig
 ---@field ghost_text LvimCmpGhostConfig
+---@field kinds LvimCmpKindsConfig
 ---@field keys LvimCmpKeysConfig
 local M = {
     enabled = true,
@@ -181,6 +191,68 @@ local M = {
     },
     ghost_text = {
         enabled = true,
+    },
+    kinds = {
+        -- Nerd Font glyphs — the SAME family as the lvim-lsp outline/breadcrumbs, so a symbol
+        -- looks identical in the completion menu and in the outline.
+        icons = {
+            Text = "󰉿",
+            Method = "󰆧",
+            Function = "󰊕",
+            Constructor = "󰙴",
+            Field = "󰜢",
+            Variable = "󰀫",
+            Class = "󰠱",
+            Interface = "󰜰",
+            Module = "󰏗",
+            Property = "󰜢",
+            Unit = "󰑭",
+            Value = "󰎠",
+            Enum = "󰕘",
+            Keyword = "󰌋",
+            Snippet = "󰩫",
+            Color = "󰏘",
+            File = "󰈙",
+            Reference = "󰈇",
+            Folder = "󰉋",
+            EnumMember = "󰦨",
+            Constant = "󰏿",
+            Struct = "󰙅",
+            Event = "󰉁",
+            Operator = "󰆕",
+            TypeParameter = "󰫣",
+        },
+        -- The outline's palette spread: functions blue, types yellow, interfaces/enums orange,
+        -- variables cyan, fields teal, constants red, modules purple, values green, container-ish
+        -- kinds magenta. `Text` (plain words — the buffer source, and any unknown kind) is purple
+        -- rather than "fg", so a word suggestion is never painted in the base text colour.
+        accents = {
+            Text = "purple",
+            Method = "blue",
+            Function = "blue",
+            Constructor = "blue",
+            Field = "teal",
+            Variable = "cyan",
+            Class = "yellow",
+            Interface = "orange",
+            Module = "purple",
+            Property = "teal",
+            Unit = "green",
+            Value = "green",
+            Enum = "orange",
+            Keyword = "purple",
+            Snippet = "green",
+            Color = "magenta",
+            File = "purple",
+            Reference = "magenta",
+            Folder = "purple",
+            EnumMember = "orange",
+            Constant = "red",
+            Struct = "yellow",
+            Event = "magenta",
+            Operator = "magenta",
+            TypeParameter = "orange",
+        },
     },
     keys = {
         select_next = { "<C-n>", "<Down>" },

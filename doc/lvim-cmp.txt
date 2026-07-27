@@ -55,7 +55,7 @@ Merges {opts} into the LIVE config in place (every reader
 autocmds, insert-mode keys and highlight factories. See the README for the
 FULL default config; the option set is documented as `LvimCmpConfig` in
 `lua/lvim-cmp/config.lua` (enabled, debounce_ms, keyword_pattern, trigger,
-fuzzy, sources.{lsp,path,buffer}, menu, docs, ghost_text, keys).
+fuzzy, sources.{lsp,path,buffer}, menu, docs, ghost_text, kinds, keys).
 
 Scratch buffers (a non-empty 'buftype') never complete regardless of `enabled`
 — UI panels, prompts, previews — UNLESS the plugin that owns one opts it in
@@ -273,6 +273,20 @@ menu PANEL shade at the `menu.tint.*` factors) are, for e.g. Function:
 
 The menu chrome itself (LvimUiMenuNormal / Sel / Thumb / Track) belongs to the
 lvim-ui `menu` preset — see |lvim-ui.menu()|.
+
+                                                             *lvim-cmp-kinds*
+The glyph and the accent of every CompletionItemKind live in the config under
+`kinds` — `kinds.icons` (kind name → Nerd glyph) and `kinds.accents` (kind name
+→ a live-palette colour NAME, e.g. "blue" / "purple" / "cyan"). All six groups
+above are derived from that ONE accent, so recolouring a kind is a single line:
+>lua
+    require("lvim-cmp").setup({
+        kinds = { accents = { Text = "cyan" } },
+    })
+<
+`Text` is the kind of a plain word — everything the buffer source yields, plus
+any kind the server does not report. It defaults to "purple" (not "fg") so a
+word suggestion never renders in the base text colour.
 
 ==============================================================================
 10. HEALTH                                                   *lvim-cmp-health*

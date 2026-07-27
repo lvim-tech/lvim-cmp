@@ -79,6 +79,25 @@ local function check_config(health)
             problems = problems + 1
         end
     end
+    -- The kind legend: an accent must be a key of the LIVE palette (a typo silently falls back
+    -- to `fg` in highlights.lua — the very "base text colour" look the accents exist to avoid),
+    -- and a glyph must be a single display cell so the chip box keeps its width.
+    local ok_colors, colors = pcall(require, "lvim-utils.colors")
+    for kind, accent in pairs((config.kinds or {}).accents or {}) do
+        if type(accent) ~= "string" then
+            health.error(("kinds.accents.%s must be a palette colour name (got %s)"):format(kind, type(accent)))
+            problems = problems + 1
+        elseif ok_colors and type(colors[accent]) ~= "string" then
+            health.error(("kinds.accents.%s = %q is not a palette colour"):format(kind, accent))
+            problems = problems + 1
+        end
+    end
+    for kind, icon in pairs((config.kinds or {}).icons or {}) do
+        if type(icon) ~= "string" or vim.fn.strdisplaywidth(icon) ~= 1 then
+            health.error(("kinds.icons.%s must be a single-width glyph (got %s)"):format(kind, vim.inspect(icon)))
+            problems = problems + 1
+        end
+    end
     for name, list in pairs(config.keys or {}) do
         if type(list) ~= "table" then
             health.error(("keys.%s must be a list of lhs strings"):format(name))
