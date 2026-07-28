@@ -16,7 +16,8 @@ local M = {}
 ---@type integer? the augroup (nil while not wired)
 local group = nil
 
----@type string? the char InsertCharPre recorded, consumed by the next TextChangedI
+---@type string? the FIRST char InsertCharPre recorded since the last TextChangedI — the one the
+--- user actually typed — consumed and cleared by that TextChangedI
 local pending_char = nil
 
 --- Install the autocmds. Idempotent (re-wires cleanly).
@@ -27,7 +28,15 @@ function M.setup()
     api.nvim_create_autocmd("InsertCharPre", {
         group = group,
         callback = function()
-            pending_char = vim.v.char
+            -- THE FIRST CHARACTER WINS, not the last. A pair-closing plugin feeds its closing
+            -- character through this same event within the SAME keystroke — measured with
+            -- lvim-pairs: typing `[` fires InsertCharPre for `[` and then for `]`, followed by one
+            -- TextChangedI. Last-writer-wins therefore handed the driver a character the user
+            -- never typed, and every trigger character that is also an opening bracket (`[`, `(`)
+            -- silently triggered nothing.
+            if pending_char == nil then
+                pending_char = vim.v.char
+            end
         end,
     })
 

@@ -24,8 +24,10 @@ local M = {}
 ---@field raw table                   the raw LSP-shaped CompletionItem (insert/resolve target)
 ---@field source_name string
 ---@field label string
----@field filter_text string          filterText or label — what fuzzy matching runs on
----@field sort_text string            sortText or label — the empty-query / tiebreak order
+---@field filter_text string          filterText or label — what fuzzy matching runs on; a source
+---   may omit it and the boundary fills it from `label`
+---@field sort_text string            sortText or label — the empty-query / tiebreak order; may be
+---   omitted with the same fallback
 ---@field kind integer?               CompletionItemKind
 ---@field client_id integer?          the LSP client that produced it (lsp source only)
 ---@field icon string?                per-item chip glyph override (path devicons)
@@ -71,6 +73,26 @@ function M.register(source, opts)
     )
     assert(type(source.enabled) == "function", "lvim-cmp.register: source.enabled(ctx) must be a function")
     assert(type(source.get) == "function", "lvim-cmp.register: source.get(ctx, cb) must be a function")
+    -- TRIGGER CHARACTERS ARE A SET, and a source that returns a LIST fails in total silence: the
+    -- registry reads the table's KEYS, so `{ "!", "[" }` contributes 1 and 2 and the source simply
+    -- never triggers. Caught here, once, at registration — the one moment the mistake is still
+    -- attributable to the source that made it.
+    if source.trigger_chars ~= nil then
+        assert(
+            type(source.trigger_chars) == "function",
+            "lvim-cmp.register: source.trigger_chars(bufnr) must be a function"
+        )
+        local ok, chars = pcall(source.trigger_chars, 0)
+        if ok and type(chars) == "table" then
+            for key in pairs(chars) do
+                assert(
+                    type(key) == "string",
+                    ("lvim-cmp.register: %s.trigger_chars must return a SET keyed by character "):format(source.name)
+                        .. '({ ["!"] = true }), not a list of characters'
+                )
+            end
+        end
+    end
     -- merge the source's config over a sane default so it slots into the priority ordering
     config.sources[source.name] = merge(config.sources[source.name] or { enabled = true, priority = 50 }, opts or {})
     for i, p in ipairs(providers) do
@@ -137,6 +159,31 @@ local function eligible(src, ctx)
     return #ctx.keyword >= (source_config(src.name).min_keyword_length or 0)
 end
 
+--- Fill in what a source left out, at the ONE point items enter the engine.
+---
+--- `label` is the only field a source must provide: `filter_text` and `sort_text` fall back to it
+--- and `source_name` is stamped from the source that answered. This is not politeness — an item
+--- without `filter_text` did not merely crash the ranker downstream, it silently MISALIGNED it:
+--- the merge builds its text array with `texts[#texts + 1] = it.filter_text`, and a nil appends
+--- nothing, so every later candidate's fuzzy index pointed at the item before it and accepting
+--- inserted the wrong one. A contract that a third-party source can break this quietly belongs at
+--- the boundary, not in every reader.
+---@param name string
+---@param items LvimCmpItem[]
+---@return LvimCmpItem[]
+local function normalize(name, items)
+    for _, it in ipairs(items) do
+        it.source_name = it.source_name or name
+        it.label = tostring(it.label or "")
+        it.filter_text = it.filter_text or it.label
+        it.sort_text = it.sort_text or it.label
+        -- The insert/resolve target. A source that shaped its candidate as a raw LSP item keeps
+        -- its own fields; one that gave only a label gets a raw item that inserts that label.
+        it.raw = it.raw or { label = it.label }
+    end
+    return items
+end
+
 --- Fan a context out to every eligible source. `on_response(source_name, items,
 --- incomplete)` fires exactly once per REGISTERED source (schedule'd): eligible primaries
 --- run immediately; a `fallback_for` source runs once the sources it falls back for have
@@ -172,7 +219,7 @@ function M.fanout(ctx, on_response)
         local cancel = src.get(ctx, function(items, incomplete)
             counts[src.name] = #items
             if not cancelled then
-                on_response(src.name, items, incomplete)
+                on_response(src.name, normalize(src.name, items), incomplete)
             end
             if after then
                 after()
