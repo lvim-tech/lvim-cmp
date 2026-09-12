@@ -35,7 +35,7 @@ planned follow-ups.
 ==============================================================================
 2. REQUIREMENTS                                        *lvim-cmp-requirements*
 
-  • Neovim >= 0.11 (client:request, vim.snippet, vim.str_byteindex)
+  • Neovim >= 0.12 (client:request, vim.snippet, vim.str_byteindex)
   • lvim-utils (palette / highlight / merge)
   • lvim-ui (the `menu` primitive, |lvim-ui.menu()|)
   • lvim-fuzzy (ranking + match positions)

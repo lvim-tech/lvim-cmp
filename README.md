@@ -53,7 +53,7 @@ through that same public API.
 
 ## Requirements
 
-Requires **Neovim >= 0.11**, [lvim-utils](https://github.com/lvim-tech/lvim-utils),
+Requires **Neovim >= 0.12**, [lvim-utils](https://github.com/lvim-tech/lvim-utils),
 [lvim-ui](https://github.com/lvim-tech/lvim-ui) (the `menu` primitive) and
 [lvim-fuzzy](https://github.com/lvim-tech/lvim-fuzzy) (ranking + match positions).
 [lvim-pairs](https://github.com/lvim-tech/lvim-pairs) is optional (the `<CR>` fallback handshake), so is
