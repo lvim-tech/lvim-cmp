@@ -2,8 +2,8 @@
 -- (LSP, filesystem paths, buffer words built-in; snippets and anything else join through
 -- the public register_source API — lvim-snippets registers itself that way) rendered in the
 -- canonical lvim-ui `menu` primitive (cursor-anchored, non-focusable), fuzzy-ranked per
--- keystroke through the shared lvim-fuzzy engine (deterministic across its native/Lua
--- backends), with matched-char highlighting on visible rows, a resolved-documentation
+-- keystroke through the shared lvim-fuzzy engine (lvim-fuzzy-core, deterministic),
+-- with matched-char highlighting on visible rows, a resolved-documentation
 -- float in the menu's sibling slot, ghost text, and textEdit/snippet/
 -- additionalTextEdits-correct acceptance. This module owns setup() and the small public
 -- API; the moving parts live in engine/trigger/sources/menu/docs.

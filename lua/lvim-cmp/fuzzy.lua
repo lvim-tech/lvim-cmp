@@ -2,8 +2,10 @@
 -- discipline lives here: the candidate FILTER TEXTS cross into the engine ONCE per
 -- source response (`prepare`), each keystroke is a single `match(query)` call, and
 -- matched-char columns (`positions`) are computed only for the menu's VISIBLE rows.
--- Ranking is lvim-fuzzy's deterministic total order — identical on the native and Lua
--- backends, so completion never ranks differently across installs.
+-- Ranking is lvim-fuzzy's deterministic total order (lvim-fuzzy-core, the same engine as
+-- lvim-picker and the terminal finder). What is typed in completion is a word, not a
+-- query: no fzf syntax (`!`, `^`, `$`, `'` and spaces are plain characters) and case is
+-- ignored — the ranking still prefers the matching case.
 --
 ---@module "lvim-cmp.fuzzy"
 
@@ -11,6 +13,10 @@ local lvim_fuzzy = require("lvim-fuzzy")
 local config = require("lvim-cmp.config")
 
 local M = {}
+
+--- The search options of every completion call: the typed word as one needle, any case.
+---@type LvimFuzzyOpts
+local OPTS = { extended = false, case = "ignore" }
 
 ---@class LvimCmpFuzzySet
 ---@field ctx LvimFuzzyContext   the prepared lvim-fuzzy context
@@ -20,7 +26,7 @@ local M = {}
 ---@param filter_texts string[]
 ---@return LvimCmpFuzzySet
 function M.prepare(filter_texts)
-    return { ctx = lvim_fuzzy.prepare(filter_texts), n = #filter_texts }
+    return { ctx = lvim_fuzzy.prepare(filter_texts, OPTS), n = #filter_texts }
 end
 
 --- Rank the prepared set against `query` (once per keystroke). Returns ranked
@@ -34,7 +40,7 @@ end
 ---@return { index: integer, score: integer }[] results
 ---@return integer count
 function M.match(set, query, boosts)
-    local results, count = lvim_fuzzy.match(query, set.ctx, boosts)
+    local results, count = lvim_fuzzy.match(query, set.ctx, boosts, OPTS)
     local cap = config.fuzzy.max_results
     if cap and cap > 0 and count > cap then
         local out = {}
@@ -55,7 +61,7 @@ function M.positions(text, query)
     if query == "" then
         return nil
     end
-    return lvim_fuzzy.positions(text, query)
+    return lvim_fuzzy.positions(text, query, OPTS)
 end
 
 return M

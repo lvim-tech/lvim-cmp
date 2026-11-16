@@ -129,9 +129,16 @@ function M.check()
     end
     local ok_fuzzy, lvim_fuzzy = pcall(require, "lvim-fuzzy")
     if ok_fuzzy then
-        health.ok(("lvim-fuzzy found — backend: %s"):format(lvim_fuzzy.backend()))
-        if type(lvim_fuzzy.positions) ~= "function" then
-            health.error("lvim-fuzzy is too old — no positions() (matched-char highlighting needs it)")
+        if type(lvim_fuzzy.native_loaded) ~= "function" or type(lvim_fuzzy.highlights) ~= "function" then
+            health.error("lvim-fuzzy is too old — update it (lvim-cmp needs the engine on lvim-fuzzy-core)")
+        elseif lvim_fuzzy.native_loaded() then
+            health.ok(("lvim-fuzzy found — backend: %s"):format(lvim_fuzzy.backend()))
+        else
+            health.error(
+                "lvim-fuzzy's native library is not loaded: "
+                    .. tostring(lvim_fuzzy.load_error())
+                    .. " — see :checkhealth lvim-fuzzy"
+            )
         end
     else
         health.error("lvim-fuzzy is required (ranking + filtering)")
